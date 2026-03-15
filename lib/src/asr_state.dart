@@ -69,3 +69,15 @@ enum ModelType {
   /// 流式中英模型
   streamingBilingual,
 }
+
+/// 识别语言枚举
+enum RecognitionLanguage {
+  /// 中文
+  chinese,
+
+  /// 英文
+  english,
+
+  /// 中英混合（自动检测）
+  bilingual,
+}

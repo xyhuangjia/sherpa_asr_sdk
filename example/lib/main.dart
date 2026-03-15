@@ -3,11 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:sherpa_asr_sdk/sherpa_asr_sdk.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
   AsrSdk.setLogger(DefaultAsrLogger());
-
   runApp(const MyApp());
 }
 
@@ -58,6 +56,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _initSdk() async {
+    if (AsrSdk.isInitialized) {
+      setState(() => _status = 'Ready');
+      await AsrSdk.start();
+      return;
+    }
+
     setState(() {
       _status = 'Initializing...';
       _initProgress = 0.0;
@@ -77,7 +81,7 @@ class _HomePageState extends State<HomePage> {
       await AsrSdk.start();
     } else {
       setState(() {
-        _status = 'Initialization failed - Model not found';
+        _status = 'Model not found - Download required';
         _initProgress = 0.0;
       });
     }
@@ -266,6 +270,28 @@ class _HomePageState extends State<HomePage> {
   Widget _buildControlButtons() {
     final isReady = AsrSdk.isStarted;
     final isListening = AsrSdk.isListening;
+    final needsModel = !AsrSdk.isInitialized;
+
+    if (needsModel) {
+      return Card(
+        color: const Color.fromARGB(255, 136, 101, 45),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Row(
+            children: [
+              Icon(Icons.warning_amber, color: Colors.orange.shade700),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Please download the model first to enable speech recognition',
+                  style: TextStyle(fontSize: 14),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -288,6 +314,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildModelSection() {
+    final needsDownload = !AsrSdk.isInitialized && !_isDownloading;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -296,7 +324,10 @@ class _HomePageState extends State<HomePage> {
           children: [
             Row(
               children: [
-                const Icon(Icons.download),
+                Icon(
+                  needsDownload ? Icons.warning_amber : Icons.check_circle,
+                  color: needsDownload ? Colors.orange : Colors.green,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   'Model Management',
@@ -312,16 +343,53 @@ class _HomePageState extends State<HomePage> {
                 'Downloading: ${(_downloadProgress * 100).toInt()}%',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
-            ] else ...[
-              ElevatedButton.icon(
-                onPressed: AsrSdk.isInitialized ? null : _downloadModel,
-                icon: const Icon(Icons.download),
-                label: const Text('Download Model'),
+            ] else if (needsDownload) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.orange),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Model required for speech recognition. Click below to download (~30MB)',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                'Download the speech recognition model (approx. 30MB)',
-                style: Theme.of(context).textTheme.bodySmall,
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _downloadModel,
+                  icon: const Icon(Icons.download),
+                  label: const Text('Download Model'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.indigo,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+            ] else ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.green),
+                    SizedBox(width: 8),
+                    Text('Model is ready', style: TextStyle(fontSize: 13)),
+                  ],
+                ),
               ),
             ],
           ],

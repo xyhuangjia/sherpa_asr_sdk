@@ -19,6 +19,7 @@ class AsrRecorder {
 
   final AudioRecorder _audioRecorder = AudioRecorder();
   StreamSubscription<List<int>>? _streamSubscription;
+  StreamSubscription<String>? _resultSubscription;
   bool _isRecording = false;
   DateTime? _startTime;
   AsrRecorderState _state = AsrRecorderState.idle;
@@ -86,6 +87,18 @@ class AsrRecorder {
         throw Exception('需要麦克风权限');
       }
       await _asrService!.startRecognition();
+
+      _resultSubscription = _asrService!.resultStream.listen(
+        (text) {
+          _log('ASR: 识别结果 - $text');
+          onPartialResult(text);
+        },
+        onError: (e) {
+          _log('ASR: 识别错误 - $e');
+          onError?.call('识别错误: $e');
+        },
+      );
+
       const config = RecordConfig(
         encoder: AudioEncoder.pcm16bits,
         sampleRate: AsrConfig.targetSampleRate,
@@ -127,7 +140,10 @@ class AsrRecorder {
       _streamSubscription = null;
       await _audioRecorder.stop();
       final result = await _asrService!.stopRecognition();
+      await _resultSubscription?.cancel();
+      _resultSubscription = null;
       if (result != null && result.isNotEmpty) {
+        _log('ASR: 最终结果 - $result');
         onFinalResult(result);
       }
       _isRecording = false;
@@ -148,6 +164,8 @@ class AsrRecorder {
       _updateState(AsrRecorderState.canceling);
       await _streamSubscription?.cancel();
       _streamSubscription = null;
+      await _resultSubscription?.cancel();
+      _resultSubscription = null;
       await _audioRecorder.stop();
       await _asrService!.cancelRecognition();
       _isRecording = false;
@@ -164,6 +182,8 @@ class AsrRecorder {
   Future<void> _cleanup() async {
     _streamSubscription?.cancel();
     _streamSubscription = null;
+    _resultSubscription?.cancel();
+    _resultSubscription = null;
     if (_isRecording) {
       try {
         await _audioRecorder.stop();

@@ -123,7 +123,8 @@ class AsrConfig {
       'streaming_bilingual_model';
 
   /// 预置模型 assets 路径
-  static const String assetsModelPath = 'assets/models/sherpa-onnx/base';
+  static const String assetsModelPath =
+      'packages/sherpa_asr_sdk/assets/models/sherpa-onnx/base';
 
   // ==================== 性能配置 ====================
 
