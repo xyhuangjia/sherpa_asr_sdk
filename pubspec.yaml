@@ -1,8 +1,9 @@
 name: sherpa_asr_sdk
 description: "Offline speech recognition SDK for Flutter using Sherpa-onnx. Supports real-time streaming ASR with automatic model download."
 version: 1.0.0
-homepage: https://github.com/your-org/sherpa_asr_sdk
-repository: https://github.com/your-org/sherpa_asr_sdk
+homepage: https://github.com/xyhuangjia/sherpa_asr_sdk
+repository: https://github.com/xyhuangjia/sherpa_asr_sdk
+issue_tracker: https://github.com/xyhuangjia/sherpa_asr_sdk/issues
 
 environment:
   sdk: ^3.10.1
