@@ -29,3 +29,6 @@ assets/models/
 
 # Android
 android/local.properties
+.opencode/*
+.trellis/*
+scripts/*

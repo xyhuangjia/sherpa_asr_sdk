@@ -1,24 +1,23 @@
 # Sherpa ASR SDK
 
-[English](#english) | [中文](#中文)
+[![pub package](https://img.shields.io/pub/v/sherpa_asr_sdk.svg)](https://pub.dev/packages/sherpa_asr_sdk)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
----
+[中文文档](README-CN.md)
 
-<a name="english"></a>
+Offline speech recognition SDK for Flutter using Sherpa-Onnx. Supports real-time streaming ASR with automatic model download.
 
-## English
+## Features
 
-Offline speech recognition SDK for Flutter using Sherpa-onnx. Supports real-time streaming ASR with automatic model download.
-
-### Features
-
-- 🎤 **Offline Recognition** - No internet required, powered by Sherpa-onnx
-- 🔄 **Real-time Streaming** - Get results as you speak
+- 🎤 **Offline Recognition** - No internet required, powered by Sherpa-Onnx
+- 🔄 **Real-time Streaming** - Get instant results as you speak
 - 📦 **Auto Download** - Models downloaded automatically on first use
-- 🔧 **Model Management** - Download and switch between models
+- 🔧 **Model Management** - Download and switch between different models
+- 🌐 **Bilingual Support** - Built-in Chinese/English bilingual model
 - 📱 **Cross Platform** - iOS and Android support
+- 🔌 **Pluggable Logger** - Flexible logging interface for debugging
 
-### Installation
+## Installation
 
 Add to your `pubspec.yaml`:
 
@@ -27,89 +26,15 @@ dependencies:
   sherpa_asr_sdk: ^1.0.0
 ```
 
-### Quick Start
+Then run:
 
-```dart
-import 'package:sherpa_asr_sdk/sherpa_asr_sdk.dart';
-
-// 1. Initialize (call once at app startup)
-AsrSdk.setLogger(DefaultAsrLogger());
-final success = await AsrSdk.initialize(
-  onProgress: (p) => print('Loading: ${(p * 100).toInt()}%'),
-);
-
-// 2. Start service (when entering a page)
-await AsrSdk.start();
-
-// 3. Recognize speech
-AsrSdk.recognize().listen((text) {
-  print('Recognized: $text');
-});
-
-// 4. Stop recognition
-await AsrSdk.stopRecognition();
-
-// 5. Stop service (when leaving page)
-await AsrSdk.stop();
-
-// 6. Dispose (when app exits)
-await AsrSdk.dispose();
+```bash
+flutter pub get
 ```
 
-### API Reference
+## Platform Setup
 
-#### Lifecycle Methods
-
-| Method | Description |
-|--------|-------------|
-| `initialize()` | Initialize SDK (call once at startup) |
-| `start()` | Start service (create recorder) |
-| `stop()` | Stop service (destroy recorder) |
-| `dispose()` | Release all resources |
-
-#### Recognition Methods
-
-| Method | Description |
-|--------|-------------|
-| `recognize()` | Start recognition, returns `Stream<String>` |
-| `stopRecognition()` | Stop current recognition |
-| `cancelRecognition()` | Cancel current recognition |
-
-#### State Properties
-
-| Property | Description |
-|----------|-------------|
-| `isInitialized` | SDK initialized |
-| `isStarted` | Service started |
-| `isListening` | Recognition in progress |
-| `state` | Current SDK state |
-| `stateStream` | Stream of state changes |
-
-### Model Management
-
-```dart
-final manager = SherpaModelsManager.instance;
-
-// Check models
-final hasModel = await manager.hasStreamingBilingualModel();
-
-// Download model
-await manager.downloadStreamingBilingualModels(
-  onProgress: (p) => print('Download: ${(p * 100).toInt()}%'),
-);
-```
-
-### Model Types
-
-| Type | Description | Size |
-|------|-------------|------|
-| Streaming Bilingual | Chinese-English | ~30MB |
-| Base | Chinese only | ~15MB |
-| Advanced | Higher quality | ~50MB |
-
-### Platform Setup
-
-#### iOS
+### iOS
 
 Add to `ios/Runner/Info.plist`:
 
@@ -118,7 +43,7 @@ Add to `ios/Runner/Info.plist`:
 <string>This app needs microphone access for speech recognition</string>
 ```
 
-#### Android
+### Android
 
 Add to `android/app/src/main/AndroidManifest.xml`:
 
@@ -127,139 +52,434 @@ Add to `android/app/src/main/AndroidManifest.xml`:
 <uses-permission android:name="android.permission.INTERNET" />
 ```
 
----
+## Quick Start
 
-<a name="中文"></a>
-
-## 中文
-
-基于 Sherpa-onnx 的 Flutter 离线语音识别 SDK。支持实时流式识别，自动下载模型。
-
-### 功能特性
-
-- 🎤 **离线识别** - 无需联网，基于 Sherpa-onnx
-- 🔄 **实时流式** - 边说边识别，即时返回结果
-- 📦 **自动下载** - 首次使用时自动下载模型
-- 🔧 **模型管理** - 支持下载和切换不同模型
-- 📱 **跨平台** - 支持 iOS 和 Android
-
-### 安装
-
-在 `pubspec.yaml` 中添加：
-
-```yaml
-dependencies:
-  sherpa_asr_sdk: ^1.0.0
-```
-
-### 快速开始
+### 1. Import the package
 
 ```dart
 import 'package:sherpa_asr_sdk/sherpa_asr_sdk.dart';
+```
 
-// 1. 初始化（应用启动时调用一次）
+### 2. Initialize SDK (call once at app startup)
+
+```dart
 AsrSdk.setLogger(DefaultAsrLogger());
+
 final success = await AsrSdk.initialize(
-  onProgress: (p) => print('加载中: ${(p * 100).toInt()}%'),
+  onProgress: (progress) => print('Loading: ${(progress * 100).toInt()}%'),
+  onStatus: (status) => print('Status: $status'),
 );
 
-// 2. 启动服务（进入页面时调用）
+if (!success) {
+  print('Failed to initialize ASR SDK');
+  return;
+}
+```
+
+### 3. Start service (when entering a page)
+
+```dart
 await AsrSdk.start();
+```
 
-// 3. 开始识别
+### 4. Recognize speech
+
+```dart
 AsrSdk.recognize().listen((text) {
-  print('识别结果: $text');
+  print('Recognized: $text');
+}, onDone: () {
+  print('Recognition completed');
 });
+```
 
-// 4. 停止识别
+### 5. Stop recognition
+
+```dart
 await AsrSdk.stopRecognition();
+```
 
-// 5. 停止服务（离开页面时调用）
+### 6. Stop service (when leaving page)
+
+```dart
 await AsrSdk.stop();
+```
 
-// 6. 释放资源（应用退出时调用）
+### 7. Dispose resources (when app exits)
+
+```dart
 await AsrSdk.dispose();
 ```
 
-### API 参考
+## Complete Example
 
-#### 生命周期方法
+```dart
+import 'package:flutter/material.dart';
+import 'package:sherpa_asr_sdk/sherpa_asr_sdk.dart';
 
-| 方法 | 描述 |
-|------|------|
-| `initialize()` | 初始化 SDK（启动时调用一次） |
-| `start()` | 启动服务（创建录音器） |
-| `stop()` | 停止服务（销毁录音器） |
-| `dispose()` | 释放所有资源 |
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  AsrSdk.setLogger(DefaultAsrLogger());
+  
+  await AsrSdk.initialize(
+    onProgress: (p) => print('Progress: ${(p * 100).toInt()}%'),
+    onStatus: (s) => print('Status: $s'),
+  );
+  
+  runApp(MyApp());
+}
 
-#### 识别方法
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: ASRScreen(),
+    );
+  }
+}
 
-| 方法 | 描述 |
-|------|------|
-| `recognize()` | 开始识别，返回 `Stream<String>` |
-| `stopRecognition()` | 停止当前识别 |
-| `cancelRecognition()` | 取消当前识别 |
+class ASRScreen extends StatefulWidget {
+  @override
+  _ASRScreenState createState() => _ASRScreenState();
+}
 
-#### 状态属性
+class _ASRScreenState extends State<ASRScreen> {
+  String _recognizedText = '';
+  bool _isListening = false;
 
-| 属性 | 描述 |
-|------|------|
-| `isInitialized` | SDK 是否已初始化 |
-| `isStarted` | 服务是否已启动 |
-| `isListening` | 是否正在识别 |
-| `state` | 当前 SDK 状态 |
-| `stateStream` | 状态变化流 |
+  @override
+  void initState() {
+    super.initState();
+    AsrSdk.start();
+  }
 
-### 模型管理
+  void _toggleRecognition() {
+    if (_isListening) {
+      AsrSdk.stopRecognition();
+      setState(() => _isListening = false);
+    } else {
+      setState(() {
+        _isListening = true;
+        _recognizedText = '';
+      });
+      
+      AsrSdk.recognize().listen((text) {
+        setState(() => _recognizedText = text);
+      }, onDone: () {
+        setState(() => _isListening = false);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    AsrSdk.stop();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Speech Recognition')),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                _recognizedText.isEmpty 
+                    ? 'Press button to start' 
+                    : _recognizedText,
+                style: TextStyle(fontSize: 18),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            SizedBox(height: 32),
+            ElevatedButton(
+              onPressed: _toggleRecognition,
+              child: Text(_isListening ? 'Stop' : 'Start'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+```
+
+## API Reference
+
+### AsrSdk - Main SDK Class
+
+#### Lifecycle Methods
+
+| Method | Description | When to Call |
+|--------|-------------|--------------|
+| `initialize()` | Initialize SDK | Once at app startup |
+| `start()` | Start service | When entering a page |
+| `stop()` | Stop service | When leaving a page |
+| `dispose()` | Release all resources | When app exits |
+
+#### Recognition Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `recognize()` | `Stream<String>` | Start speech recognition |
+| `stopRecognition()` | `Future<void>` | Stop current recognition |
+| `cancelRecognition()` | `Future<void>` | Cancel current recognition |
+| `pause()` | `Future<void>` | Pause recognition |
+| `resume()` | `Stream<String>` | Resume recognition |
+
+#### State Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `isInitialized` | `bool` | Whether SDK is initialized |
+| `isStarted` | `bool` | Whether service is started |
+| `isListening` | `bool` | Whether currently recognizing |
+| `state` | `AsrSdkState` | Current SDK state |
+| `duration` | `int` | Recording duration in seconds |
+| `stateStream` | `Stream<AsrSdkState>` | Stream of state changes |
+
+#### Configuration Methods
+
+| Method | Description |
+|--------|-------------|
+| `setLogger(AsrLogger logger)` | Set custom logger |
+
+### AsrSdkState - SDK States
+
+| State | Description |
+|-------|-------------|
+| `notInitialized` | SDK not initialized |
+| `initializing` | SDK is initializing |
+| `ready` | SDK is ready |
+| `started` | Service started |
+| `error` | Error occurred |
+
+### AsrLogger - Logging Interface
+
+```dart
+abstract class AsrLogger {
+  void debug(String message);
+  void info(String message);
+  void warning(String message);
+  void error(String message);
+}
+```
+
+Use `DefaultAsrLogger` for console logging or implement your own logger.
+
+## Model Management
+
+### Model Types
+
+| Type | Description | Size | Use Case |
+|------|-------------|------|----------|
+| Streaming Bilingual | Chinese-English | ~30MB | Mixed language recognition |
+| Base Model | Chinese only | ~15MB | Pure Chinese recognition |
+| Advanced Model | Higher quality | ~50MB | Better accuracy |
+
+### Model Operations
 
 ```dart
 final manager = SherpaModelsManager.instance;
 
-// 检查模型
+// Initialize manager
+await manager.initialize();
+
+// Check if model exists
 final hasModel = await manager.hasStreamingBilingualModel();
 
-// 下载模型
+// Get available model path
+final modelPath = await manager.getBestModelPath();
+
+// Download model
 await manager.downloadStreamingBilingualModels(
-  onProgress: (p) => print('下载中: ${(p * 100).toInt()}%'),
+  onProgress: (progress) => print('Download: ${(progress * 100).toInt()}%'),
+  onStatusChange: (status) => print('Status: $status'),
 );
 ```
 
-### 模型类型
+### Model Storage
 
-| 类型 | 描述 | 大小 |
-|------|------|------|
-| 流式中英双语 | 中英文混合识别 | 约 30MB |
-| 基础中文 | 纯中文识别 | 约 15MB |
-| 高级模型 | 更高质量 | 约 50MB |
+Models are stored in the app's document directory:
+- **iOS**: `NSDocumentDirectory/sherpa_models/`
+- **Android**: `files/sherpa_models/`
 
-### 平台配置
+## Configuration
 
-#### iOS
+### Audio Parameters
 
-在 `ios/Runner/Info.plist` 中添加：
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Sample Rate | 16000 Hz | Required by Sherpa-Onnx |
+| Channels | 1 | Mono audio |
+| Audio Chunk | 100 ms | Real-time processing |
+| Bit Rate | 128 kbps | Audio quality |
 
-```xml
-<key>NSMicrophoneUsageDescription</key>
-<string>此应用需要麦克风权限以进行语音识别</string>
+### Recognition Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Num Threads | 2 | Processing threads |
+| Max Duration | 60 seconds | Maximum recognition duration |
+| Min Duration | 1 second | Minimum recognition duration |
+
+## Platform Support
+
+| Platform | Support | Notes |
+|----------|---------|-------|
+| iOS | ✅ | iOS 11.0+ |
+| Android | ✅ | Android 5.0+ (API 21+) |
+| Web | ❌ | Not supported |
+| macOS | ❌ | Not supported |
+| Windows | ❌ | Not supported |
+| Linux | ❌ | Not supported |
+
+## Performance
+
+- **Latency**: < 100ms for real-time streaming
+- **Memory**: ~50-100MB depending on model
+- **CPU**: Optimized for mobile devices
+- **Battery**: Efficient power usage
+- **Offline**: Fully offline, no network required
+
+## Troubleshooting
+
+### Common Issues
+
+#### 1. Initialization Fails
+
+**Symptoms**: `initialize()` returns `false`
+
+**Solutions**:
+- Check microphone permission
+- Ensure sufficient storage space (~100MB)
+- Check internet connection for first-time model download
+- Review logs using `AsrSdk.setLogger(DefaultAsrLogger())`
+
+#### 2. No Audio Input
+
+**Symptoms**: No recognition results
+
+**Solutions**:
+- Verify microphone permission is granted
+- Check if another app is using the microphone
+- Test with another audio recording app
+
+#### 3. Poor Recognition Quality
+
+**Symptoms**: Inaccurate or missing words
+
+**Solutions**:
+- Speak clearly and close to microphone
+- Reduce background noise
+- Try bilingual model for mixed language
+- Ensure proper audio input
+
+#### 4. App Crashes
+
+**Symptoms**: App crashes during recognition
+
+**Solutions**:
+- Check available memory
+- Ensure proper lifecycle management (call `stop()` when leaving page)
+- Review crash logs
+
+### Debug Mode
+
+Enable detailed logging:
+
+```dart
+AsrSdk.setLogger(DefaultAsrLogger());
 ```
 
-#### Android
+Monitor state changes:
 
-在 `android/app/src/main/AndroidManifest.xml` 中添加：
-
-```xml
-<uses-permission android:name="android.permission.RECORD_AUDIO" />
-<uses-permission android:name="android.permission.INTERNET" />
+```dart
+AsrSdk.stateStream.listen((state) {
+  print('State changed to: $state');
+});
 ```
 
----
+## Examples
 
-## Example / 示例
+See the `/example` directory for complete examples:
 
-See the `example/` directory for a complete sample app.
+- **Basic Usage**: Simple speech recognition
+- **State Management**: Integration with Provider/Riverpod
+- **Custom Logger**: Implement custom logging
+- **Model Management**: Download and switch models
 
-查看 `example/` 目录获取完整示例应用。
+## Architecture
 
-## License / 许可证
+```
+sherpa_asr_sdk/
+├── lib/
+│   ├── sherpa_asr_sdk.dart          # Main export
+│   └── src/
+│       ├── asr_sdk.dart              # SDK main class
+│       ├── asr_service.dart          # Recognition service
+│       ├── asr_recorder.dart         # Audio recorder
+│       ├── asr_config.dart           # Configuration
+│       ├── asr_state.dart            # State definitions
+│       ├── asr_callbacks.dart        # Callback interfaces
+│       ├── model/
+│       │   └── sherpa_models_manager.dart
+│       └── utils/
+│           ├── asr_logger.dart       # Logging utilities
+│           └── audio_converter.dart  # Audio processing
+└── example/                          # Example app
+```
 
-MIT License
+## Contributing
+
+Contributions are welcome! Please follow these steps:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+### Development Setup
+
+1. Clone the repository
+2. Run `flutter pub get`
+3. Run tests: `flutter test`
+4. Check formatting: `dart format .`
+5. Analyze code: `flutter analyze`
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- [Sherpa-Onnx](https://github.com/k2-fsa/sherpa-onnx) - The speech recognition engine
+- [k2-fsa](https://github.com/k2-fsa) - For the pre-trained models
+- [Flutter](https://flutter.dev) - The UI framework
+
+## Support
+
+If you encounter any issues or have questions:
+
+1. Check the [FAQ](https://github.com/xyhuangjia/sherpa_asr_sdk/wiki/FAQ)
+2. Search [existing issues](https://github.com/xyhuangjia/sherpa_asr_sdk/issues)
+3. Create a [new issue](https://github.com/xyhuangjia/sherpa_asr_sdk/issues/new)
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
+
+## Roadmap
+
+- [ ] Support for more languages
+- [ ] Wake word detection
+- [ ] Speaker identification
+- [ ] Noise reduction
+- [ ] Platform optimization
+
+
