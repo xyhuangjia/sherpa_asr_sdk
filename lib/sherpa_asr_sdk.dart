@@ -30,7 +30,7 @@
 /// // Dispose (when app exits)
 /// await AsrSdk.dispose();
 /// ```
-library sherpa_asr_sdk;
+library;
 
 export 'src/asr_sdk.dart';
 export 'src/asr_state.dart';
@@ -38,3 +38,7 @@ export 'src/asr_config.dart';
 export 'src/asr_callbacks.dart';
 export 'src/utils/asr_logger.dart';
 export 'src/model/sherpa_models_manager.dart';
+export 'src/vad/asr_vad_config.dart';
+export 'src/vad/asr_vad_state.dart';
+export 'src/speaker/asr_speaker_config.dart';
+export 'src/speaker/speaker_data_storage.dart';

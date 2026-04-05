@@ -122,6 +122,12 @@ class AsrConfig {
   static const String streamingBilingualModelDirName =
       'streaming_bilingual_model';
 
+  /// VAD 模型目录名称
+  static const String vadModelDirName = 'vad_model';
+
+  /// 说话人识别模型目录名称
+  static const String speakerReidModelDirName = 'speaker_reid_model';
+
   /// 预置模型 assets 路径
   static const String assetsModelPath =
       'packages/sherpa_asr_sdk/assets/models/sherpa-onnx/base';

@@ -22,6 +22,8 @@ class SherpaModelsManager {
   Directory? _baseModelDir;
   Directory? _advancedModelDir;
   Directory? _streamingBilingualModelDir;
+  Directory? _vadModelDir;
+  Directory? _speakerReidModelDir;
 
   AsrLogger? _logger;
 
@@ -77,6 +79,12 @@ class SherpaModelsManager {
     _streamingBilingualModelDir = Directory(
       '${_modelsRootDir!.path}/${AsrConfig.streamingBilingualModelDirName}',
     );
+    _vadModelDir = Directory(
+      '${_modelsRootDir!.path}/${AsrConfig.vadModelDirName}',
+    );
+    _speakerReidModelDir = Directory(
+      '${_modelsRootDir!.path}/${AsrConfig.speakerReidModelDirName}',
+    );
 
     if (!await _modelsRootDir!.exists()) {
       await _modelsRootDir!.create(recursive: true);
@@ -89,6 +97,12 @@ class SherpaModelsManager {
     }
     if (!await _streamingBilingualModelDir!.exists()) {
       await _streamingBilingualModelDir!.create(recursive: true);
+    }
+    if (!await _vadModelDir!.exists()) {
+      await _vadModelDir!.create(recursive: true);
+    }
+    if (!await _speakerReidModelDir!.exists()) {
+      await _speakerReidModelDir!.create(recursive: true);
     }
   }
 
@@ -122,11 +136,23 @@ class SherpaModelsManager {
 
   /// 检查 VAD 模型是否存在
   Future<bool> hasVadModel() async {
-    if (_baseModelDir == null) {
+    if (_vadModelDir == null) {
       await _initializeDirectories();
     }
-    final vadModel = File('${_baseModelDir!.path}/silero_vad.onnx');
+    final vadModel = File('${_vadModelDir!.path}/silero_vad.onnx');
     return await vadModel.exists() && await vadModel.length() > 0;
+  }
+
+  /// 检查说话人识别模型是否存在
+  Future<bool> hasSpeakerReidModel() async {
+    if (_speakerReidModelDir == null) {
+      await _initializeDirectories();
+    }
+    if (!await _speakerReidModelDir!.exists()) {
+      return false;
+    }
+    final files = await _speakerReidModelDir!.list().toList();
+    return files.any((f) => f is File && f.path.endsWith('.onnx'));
   }
 
   Future<String> _detectModelType() async {
@@ -217,6 +243,22 @@ class SherpaModelsManager {
   Future<String?> getStreamingBilingualModelPath() async {
     if (await hasStreamingBilingualModel()) {
       return _streamingBilingualModelDir!.path;
+    }
+    return null;
+  }
+
+  /// 获取 VAD 模型路径
+  Future<String?> getVadModelPath() async {
+    if (await hasVadModel()) {
+      return _vadModelDir!.path;
+    }
+    return null;
+  }
+
+  /// 获取说话人识别模型路径
+  Future<String?> getSpeakerReidModelPath() async {
+    if (await hasSpeakerReidModel()) {
+      return _speakerReidModelDir!.path;
     }
     return null;
   }

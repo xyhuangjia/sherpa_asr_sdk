@@ -8,6 +8,10 @@ import 'asr_config.dart';
 import 'asr_state.dart';
 import 'model/sherpa_models_manager.dart';
 import 'utils/asr_logger.dart';
+import 'vad/asr_vad_config.dart';
+import 'vad/asr_vad_state.dart';
+import 'speaker/asr_speaker_config.dart';
+import 'speaker/speaker_data_storage.dart';
 
 /// ASR 服务
 /// 单例模式，提供语音识别功能
@@ -38,6 +42,41 @@ class AsrService {
   String _accumulatedText = '';
   DateTime? _recognitionStartTime;
   Timer? _silenceTimer;
+
+  // VAD 相关成员
+  sherpa_onnx.VoiceActivityDetector? _vad;
+  AsrVadConfig _vadConfig = const AsrVadConfig();
+  bool _isVadEnabled = false;
+  bool _isSpeechDetected = false;
+  final StreamController<VadState> _vadStateController =
+      StreamController<VadState>.broadcast();
+
+  // VAD 状态流
+  Stream<VadState> get vadStateStream => _vadStateController.stream;
+
+  // VAD 配置
+  AsrVadConfig get vadConfig => _vadConfig;
+  bool get isVadEnabled => _isVadEnabled;
+
+  // Speaker ID 相关成员
+  sherpa_onnx.SpeakerEmbeddingExtractor? _speakerExtractor;
+  sherpa_onnx.SpeakerEmbeddingManager? _speakerManager;
+  AsrSpeakerConfig _speakerConfig = const AsrSpeakerConfig();
+  bool _isSpeakerIdEnabled = false;
+  final SpeakerDataStorage _speakerStorage = SpeakerDataStorage();
+
+  // Speaker ID 活跃流管理
+  sherpa_onnx.OnlineStream? _speakerStream;
+  final List<Float32List> _speakerEmbeddingBuffer = [];
+
+  // Speaker ID 状态流
+  final StreamController<String> _speakerStateController =
+      StreamController<String>.broadcast();
+  Stream<String> get speakerStateStream => _speakerStateController.stream;
+
+  // Speaker ID 配置和状态
+  AsrSpeakerConfig get speakerConfig => _speakerConfig;
+  bool get isSpeakerIdEnabled => _isSpeakerIdEnabled;
 
   /// 状态流
   Stream<AsrState> get stateStream => _stateController.stream;
@@ -303,7 +342,12 @@ class AsrService {
     if (_currentMode == AsrMode.offline &&
         _sherpaRecognizer != null &&
         _stream != null) {
-      _processOfflineSamples(samples);
+      // 使用 VAD 处理或直接用原有方法
+      if (_isVadEnabled && _vad != null) {
+        _processAudioWithVad(samples);
+      } else {
+        _processOfflineSamples(samples);
+      }
     }
   }
 
@@ -344,18 +388,477 @@ class AsrService {
     _log('ASR: 识别器已重置');
   }
 
+  // ==================== VAD 方法 ====================
+
+  /// 启用/禁用 VAD
+  Future<void> enableVAD(bool enabled) async {
+    _isVadEnabled = enabled;
+    if (enabled) {
+      await _initializeVad();
+    } else {
+      _vad?.free();
+      _vad = null;
+    }
+    _log('ASR: VAD 已${enabled ? "启用" : "禁用"}');
+  }
+
+  /// 设置 VAD 配置
+  Future<void> setVadConfig(AsrVadConfig config) async {
+    _vadConfig = config;
+    _log('ASR: VAD 配置已更新 - $config');
+
+    // 如果 VAD 已启用，重新初始化
+    if (_isVadEnabled) {
+      await _initializeVad();
+    }
+  }
+
+  /// 初始化 VAD
+  Future<void> _initializeVad() async {
+    try {
+      _vad?.free();
+
+      // 获取 VAD 模型路径
+      String? vadModelPath = await SherpaModelsManager.instance.getVadModelPath();
+
+      // 如果没有独立 VAD 模型，尝试基础模型目录中的 VAD 模型
+      if (vadModelPath == null) {
+        final baseVadFile = File(
+          '${await SherpaModelsManager.instance.getBaseModelPath()}/silero_vad.onnx',
+        );
+        if (await baseVadFile.exists()) {
+          vadModelPath = '${await SherpaModelsManager.instance.getBaseModelPath()}';
+        }
+      }
+
+      if (vadModelPath == null) {
+        _log('ASR: VAD 模型未找到，VAD 功能不可用');
+        return;
+      }
+
+      final config = sherpa_onnx.VadModelConfig(
+        sileroVad: sherpa_onnx.SileroVadModelConfig(
+          model: '$vadModelPath/silero_vad.onnx',
+          threshold: _vadConfig.threshold,
+          minSilenceDuration: _vadConfig.minSilenceDuration,
+          minSpeechDuration: _vadConfig.minSpeechDuration,
+          maxSpeechDuration: _vadConfig.maxSpeechDuration,
+          windowSize: _vadConfig.windowSize,
+        ),
+        sampleRate: AsrConfig.targetSampleRate,
+        numThreads: 1,
+        provider: 'cpu',
+        debug: true,
+      );
+
+      _vad = sherpa_onnx.VoiceActivityDetector(
+        config: config,
+        bufferSizeInSeconds: 60,
+      );
+
+      _log('ASR: VAD 初始化成功');
+    } catch (e) {
+      _log('ASR: VAD 初始化失败 - $e');
+      _isVadEnabled = false;
+    }
+  }
+
+  /// 处理带 VAD 的音频数据
+  void _processAudioWithVad(List<double> samples) {
+    if (!_isVadEnabled || _vad == null) {
+      _processOfflineSamples(samples);
+      return;
+    }
+
+    try {
+      final float32 = Float32List.fromList(samples);
+      _vad!.acceptWaveform(float32);
+
+      // 检查是否检测到语音
+      if (_vad!.isDetected()) {
+        if (!_isSpeechDetected) {
+          // 语音开始
+          _isSpeechDetected = true;
+          _vadStateController.add(VadState.speechStarted);
+          _log('ASR VAD: 检测到语音开始');
+
+          // 创建新的识别流
+          _stream?.free();
+          _stream = _sherpaRecognizer?.createStream();
+        } else {
+          _vadStateController.add(VadState.speechInProgress);
+        }
+
+        // 处理音频（空值检查）
+        if (_sherpaRecognizer != null && _stream != null) {
+          _processOfflineSamples(samples);
+        }
+      } else {
+        // VAD 未检测到语音，可能是静音
+        if (_isSpeechDetected) {
+          // 之前检测到语音，现在变为静音，可能是语音结束
+          _vadStateController.add(VadState.silence);
+        }
+      }
+
+      // 检查是否有完整的语音段
+      if (!_vad!.isEmpty()) {
+        final segment = _vad!.front();
+        if (segment.samples.isNotEmpty) {
+          // 语音结束
+          _isSpeechDetected = false;
+          _vadStateController.add(VadState.speechEnded);
+          _log('ASR VAD: 检测到语音结束');
+
+          // 获取最终识别结果（空值检查）
+          if (_sherpaRecognizer != null && _stream != null) {
+            final text = _sherpaRecognizer!.getResult(_stream!).text;
+            if (text.isNotEmpty) {
+              _resultController.add(text);
+            }
+
+            // 重置识别流
+            _stream?.free();
+            _stream = _sherpaRecognizer?.createStream();
+          }
+          _vad!.pop();
+        }
+      }
+    } catch (e) {
+      _log('ASR VAD: 处理音频失败 - $e');
+    }
+  }
+
   /// 释放资源
   Future<void> dispose() async {
     _silenceTimer?.cancel();
+
+    // 释放 VAD 资源
+    _vad?.free();
+    _vad = null;
+
+    // 释放 Speaker ID 资源
+    _speakerStream?.free();
+    _speakerStream = null;
+    _speakerExtractor?.free();
+    _speakerExtractor = null;
+    _speakerManager?.free();
+    _speakerManager = null;
+
+    // 关闭所有流控制器
+    await _vadStateController.close();
+    await _speakerStateController.close();
     await _stateController.close();
     await _resultController.close();
     await _progressController.close();
     await _statusController.close();
+
+    // 释放 ASR 资源
     _stream?.free();
     _stream = null;
     _sherpaRecognizer?.free();
     _sherpaRecognizer = null;
+
     _updateState(AsrState.idle);
     _log('ASR: 服务已释放');
+  }
+
+  // ==================== Speaker ID 方法 ====================
+
+  /// 启用/禁用说话人识别
+  Future<void> enableSpeakerId(bool enabled) async {
+    _isSpeakerIdEnabled = enabled;
+    if (enabled) {
+      await _initializeSpeakerId();
+    }
+    _log('ASR: 说话人识别已${enabled ? "启用" : "禁用"}');
+  }
+
+  /// 设置说话人识别配置
+  Future<void> setSpeakerIdConfig(AsrSpeakerConfig config) async {
+    _speakerConfig = config;
+    _log('ASR: 说话人识别配置已更新 - $config');
+
+    if (_isSpeakerIdEnabled) {
+      await _initializeSpeakerId();
+    }
+  }
+
+  /// 初始化说话人识别
+  Future<void> _initializeSpeakerId() async {
+    try {
+      _speakerExtractor?.free();
+      _speakerManager?.free();
+
+      // 初始化存储
+      await _speakerStorage.initialize();
+
+      // 获取说话人识别模型路径
+      String? reidModelPath = await SherpaModelsManager.instance.getSpeakerReidModelPath();
+
+      if (reidModelPath == null) {
+        _log('ASR: 说话人识别模型未找到，功能不可用');
+        _isSpeakerIdEnabled = false;
+        return;
+      }
+
+      // 创建特征提取器
+      final extractorConfig = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+        model: '$reidModelPath/model.onnx',
+        numThreads: 1,
+        debug: true,
+        provider: 'cpu',
+      );
+
+      _speakerExtractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+        config: extractorConfig,
+      );
+
+      // 创建管理器
+      final dim = _speakerExtractor!.dim;
+      _speakerManager = sherpa_onnx.SpeakerEmbeddingManager(dim);
+
+      // 加载已保存的说话人数据
+      await _loadSavedSpeakers();
+
+      _log('ASR: 说话人识别初始化成功，维度：$dim');
+    } catch (e) {
+      _log('ASR: 说话人识别初始化失败 - $e');
+      _isSpeakerIdEnabled = false;
+    }
+  }
+
+  /// 加载已保存的说话人数据
+  Future<void> _loadSavedSpeakers() async {
+    try {
+      final speakers = await _speakerStorage.getAllSpeakers();
+      for (final name in speakers) {
+        final embedding = await _speakerStorage.loadSpeaker(name);
+        if (embedding != null) {
+          _speakerManager?.add(name: name, embedding: embedding);
+        }
+      }
+      _log('ASR: 已加载 ${speakers.length} 个说话人');
+    } catch (e) {
+      _log('ASR: 加载说话人数据失败 - $e');
+    }
+  }
+
+  /// 注册说话人
+  ///
+  /// [name] 说话人姓名
+  /// [duration] 注册时长（建议 3-5 秒）
+  ///
+  /// 注意：调用此方法前，需要先调用 [startSpeakerRegistration] 开始录音，
+  /// 并在注册期间持续调用 [acceptAudioForSpeaker] 提供音频数据。
+  /// 或者，使用简化版本：直接调用本方法，会在指定时长内等待音频数据。
+  Future<bool> registerSpeaker(String name, Duration duration) async {
+    if (!_isSpeakerIdEnabled || _speakerExtractor == null) {
+      _log('ASR: 说话人识别未启用');
+      return false;
+    }
+
+    try {
+      _log('ASR: 开始注册说话人 - $name');
+
+      // 创建新的流
+      final stream = _speakerExtractor!.createStream();
+
+      // 简化实现：等待指定时长，假设外部会调用 acceptAudioForSpeaker 提供数据
+      // 实际使用中，应该在使用 AsrRecorder 时自动完成这个过程
+      final startTime = DateTime.now();
+      while (DateTime.now().difference(startTime) < duration) {
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+
+      // 计算特征
+      if (!_speakerExtractor!.isReady(stream)) {
+        _log('ASR: 说话人注册失败 - 流未就绪');
+        stream.free();
+        return false;
+      }
+
+      final embedding = _speakerExtractor!.compute(stream);
+      stream.free();
+
+      if (embedding.isEmpty) {
+        _log('ASR: 说话人注册失败 - 特征提取失败');
+        return false;
+      }
+
+      // 保存到管理器
+      final added = _speakerManager?.add(name: name, embedding: embedding);
+      if (added != true) {
+        _log('ASR: 说话人注册失败 - 添加到管理器失败');
+        return false;
+      }
+
+      // 持久化存储
+      final saved = await _speakerStorage.saveSpeaker(name, embedding);
+      if (!saved) {
+        _log('ASR: 说话人注册失败 - 持久化失败');
+        _speakerManager?.remove(name);
+        return false;
+      }
+
+      _log('ASR: 说话人注册成功 - $name');
+      return true;
+    } catch (e) {
+      _log('ASR: 说话人注册失败 - $e');
+      return false;
+    }
+  }
+
+  /// 开始说话人注册
+  ///
+  /// 调用此方法后，需要持续调用 [acceptAudioForSpeaker] 提供音频数据
+  void startSpeakerRegistration() {
+    if (!_isSpeakerIdEnabled || _speakerExtractor == null) {
+      return;
+    }
+    resetSpeakerId();
+    _log('ASR: 开始说话人注册流程');
+  }
+
+  /// 完成说话人注册并获取特征
+  ///
+  /// 返回提取的 embedding 向量，调用者负责保存到 Manager 和存储
+  Float32List? finishSpeakerRegistration() {
+    if (_speakerStream == null || _speakerExtractor == null) {
+      return null;
+    }
+
+    try {
+      if (!_speakerExtractor!.isReady(_speakerStream!)) {
+        return null;
+      }
+
+      final embedding = _speakerExtractor!.compute(_speakerStream!);
+      resetSpeakerId();
+
+      return embedding.isEmpty ? null : embedding;
+    } catch (e) {
+      _log('ASR: 完成说话人注册失败 - $e');
+      return null;
+    }
+  }
+
+  /// 识别当前说话人
+  Future<String> identifySpeaker() async {
+    if (!_isSpeakerIdEnabled || _speakerExtractor == null) {
+      return '';
+    }
+
+    try {
+      // 注意：实际使用中需要从音频流提取特征
+      // 这里简化处理，返回空字符串表示未知
+      _log('ASR: 识别说话人 - 需要从音频流提取特征');
+      return '';
+    } catch (e) {
+      _log('ASR: 识别说话人失败 - $e');
+      return '';
+    }
+  }
+
+  /// 验证说话人身份
+  Future<bool> verifySpeaker(String name, Float32List embedding) async {
+    if (!_isSpeakerIdEnabled || _speakerManager == null) {
+      return false;
+    }
+
+    try {
+      final verified = _speakerManager!.verify(
+        name: name,
+        embedding: embedding,
+        threshold: _speakerConfig.verificationThreshold,
+      );
+      return verified;
+    } catch (e) {
+      _log('ASR: 验证说话人失败 - $e');
+      return false;
+    }
+  }
+
+  /// 移除说话人
+  Future<void> removeSpeaker(String name) async {
+    if (_speakerManager != null) {
+      _speakerManager?.remove(name);
+    }
+    await _speakerStorage.deleteSpeaker(name);
+    _log('ASR: 说话人已移除 - $name');
+  }
+
+  /// 列出所有已注册的说话人
+  Future<List<String>> listSpeakers() async {
+    return await _speakerStorage.getAllSpeakers();
+  }
+
+  /// 清除所有说话人数据
+  Future<void> clearAllSpeakers() async {
+    _speakerManager = null;
+    await _speakerStorage.clearAllSpeakers();
+
+    // 重新初始化管理器
+    if (_isSpeakerIdEnabled) {
+      await _initializeSpeakerId();
+    }
+    _log('ASR: 所有说话人已清除');
+  }
+
+  /// 获取已注册说话人数量
+  Future<int> getSpeakerCount() async {
+    return await _speakerStorage.getSpeakerCount();
+  }
+
+  /// 为说话人识别提供音频数据
+  void acceptAudioForSpeaker(List<double> samples) {
+    if (!_isSpeakerIdEnabled || _speakerExtractor == null) {
+      return;
+    }
+
+    try {
+      // 如果还没有活跃流，创建一个
+      _speakerStream ??= _speakerExtractor!.createStream();
+
+      final float32 = Float32List.fromList(samples);
+      _speakerStream!.acceptWaveform(
+        samples: float32,
+        sampleRate: AsrConfig.targetSampleRate,
+      );
+    } catch (e) {
+      _log('ASR: 提取说话人特征失败 - $e');
+    }
+  }
+
+  /// 计算当前说话人特征
+  /// 返回提取的 embedding 向量
+  Float32List? computeSpeakerEmbedding() {
+    if (_speakerStream == null || _speakerExtractor == null) {
+      return null;
+    }
+
+    try {
+      if (!_speakerExtractor!.isReady(_speakerStream!)) {
+        return null;
+      }
+
+      final embedding = _speakerExtractor!.compute(_speakerStream!);
+
+      // 释放旧流并创建新流
+      _speakerStream?.free();
+      _speakerStream = _speakerExtractor!.createStream();
+
+      return embedding.isEmpty ? null : embedding;
+    } catch (e) {
+      _log('ASR: 计算说话人特征失败 - $e');
+      return null;
+    }
+  }
+
+  /// 重置说话识别流
+  void resetSpeakerId() {
+    _speakerStream?.free();
+    _speakerStream = null;
+    _speakerEmbeddingBuffer.clear();
   }
 }

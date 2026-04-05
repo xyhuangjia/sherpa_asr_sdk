@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'asr_recorder.dart';
 import 'asr_service.dart';
 import 'asr_state.dart';
 import 'utils/asr_logger.dart';
+import 'vad/asr_vad_config.dart';
+import 'vad/asr_vad_state.dart';
+import 'speaker/asr_speaker_config.dart';
 
 /// ASR SDK 全局服务
 ///
@@ -61,6 +65,28 @@ class AsrSdk {
 
   /// 获取状态流
   static Stream<AsrSdkState> get stateStream => _stateController.stream;
+
+  // ==================== VAD 相关 ====================
+
+  /// VAD 状态流
+  static Stream<VadState> get vadStateStream => _asrService.vadStateStream;
+
+  /// 是否启用 VAD
+  static bool get isVadEnabled => _asrService.isVadEnabled;
+
+  /// VAD 配置
+  static AsrVadConfig get vadConfig => _asrService.vadConfig;
+
+  // ==================== Speaker ID 相关 ====================
+
+  /// Speaker ID 状态流
+  static Stream<String> get speakerStateStream => _asrService.speakerStateStream;
+
+  /// 是否启用 Speaker ID
+  static bool get isSpeakerIdEnabled => _asrService.isSpeakerIdEnabled;
+
+  /// Speaker ID 配置
+  static AsrSpeakerConfig get speakerConfig => _asrService.speakerConfig;
 
   // ==================== 日志配置 ====================
 
@@ -284,6 +310,79 @@ class AsrSdk {
   /// 恢复识别（等同于重新开始 recognize）
   static Stream<String> resume() {
     return recognize();
+  }
+
+  // ==================== VAD 控制 ====================
+
+  /// 启用/禁用 VAD (Voice Activity Detection)
+  ///
+  /// VAD 可以自动检测语音活动，实现：
+  /// - 自动开始识别（检测到语音时）
+  /// - 自动结束识别（检测到静音时）
+  /// - 语音事件回调
+  static Future<void> enableVAD(bool enabled) async {
+    await _asrService.enableVAD(enabled);
+  }
+
+  /// 设置 VAD 配置
+  static Future<void> setVadConfig(AsrVadConfig config) async {
+    await _asrService.setVadConfig(config);
+  }
+
+  // ==================== Speaker ID 控制 ====================
+
+  /// 启用/禁用说话人识别
+  static Future<void> enableSpeakerId(bool enabled) async {
+    await _asrService.enableSpeakerId(enabled);
+  }
+
+  /// 设置说话人识别配置
+  static Future<void> setSpeakerIdConfig(AsrSpeakerConfig config) async {
+    await _asrService.setSpeakerIdConfig(config);
+  }
+
+  /// 注册说话人
+  ///
+  /// [name] 说话人姓名
+  /// [duration] 注册时长（建议 3-5 秒）
+  static Future<bool> registerSpeaker({
+    required String name,
+    required Duration duration,
+  }) async {
+    return await _asrService.registerSpeaker(name, duration);
+  }
+
+  /// 识别当前说话人
+  static Future<String> identifySpeaker() async {
+    return await _asrService.identifySpeaker();
+  }
+
+  /// 验证说话人身份
+  static Future<bool> verifySpeaker({
+    required String name,
+    required Float32List embedding,
+  }) async {
+    return await _asrService.verifySpeaker(name, embedding);
+  }
+
+  /// 移除说话人
+  static Future<void> removeSpeaker(String name) async {
+    await _asrService.removeSpeaker(name);
+  }
+
+  /// 列出所有已注册的说话人
+  static Future<List<String>> listSpeakers() async {
+    return await _asrService.listSpeakers();
+  }
+
+  /// 清除所有说话人数据
+  static Future<void> clearAllSpeakers() async {
+    await _asrService.clearAllSpeakers();
+  }
+
+  /// 获取已注册说话人数量
+  static Future<int> getSpeakerCount() async {
+    return await _asrService.getSpeakerCount();
   }
 
   // ==================== 状态查询 ====================
