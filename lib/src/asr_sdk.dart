@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'asr_recorder.dart';
+import 'asr_result.dart';
 import 'asr_service.dart';
 import 'asr_state.dart';
 import 'utils/asr_logger.dart';
@@ -56,6 +57,7 @@ class AsrSdk {
   static AsrSdkState _state = AsrSdkState.notInitialized;
   static AsrRecorder? _recorder;
   static StreamController<String>? _streamController;
+  static StreamController<AsrResult>? _timestampStreamController;
   static bool _isListening = false;
   static AsrLogger? _logger;
 
@@ -210,6 +212,8 @@ class AsrSdk {
     _isListening = false;
     _streamController?.close();
     _streamController = null;
+    _timestampStreamController?.close();
+    _timestampStreamController = null;
 
     if (_recorder != null) {
       await _recorder!.dispose();
@@ -240,6 +244,8 @@ class AsrSdk {
   /// 每次调用返回当前次识别结果的 Stream。
   /// 如果之前有识别在进行，会先停止再开始新的。
   static Stream<String> recognize() {
+    _timestampStreamController?.close();
+    _timestampStreamController = null;
     _streamController?.close();
     _streamController = StreamController<String>();
     _isListening = true;
@@ -247,6 +253,22 @@ class AsrSdk {
     _beginRecognition();
 
     return _streamController!.stream;
+  }
+
+  /// 开始语音识别（带时间戳）
+  ///
+  /// 返回 Stream<AsrResult>，包含每个 token 的起始时间和持续时间。
+  /// 与 [recognize] 互斥，同时只能使用其中一个。
+  static Stream<AsrResult> recognizeWithTimestamps() {
+    _streamController?.close();
+    _streamController = null;
+    _timestampStreamController?.close();
+    _timestampStreamController = StreamController<AsrResult>();
+    _isListening = true;
+
+    _beginRecognitionWithTimestamps();
+
+    return _timestampStreamController!.stream;
   }
 
   /// 内部开始识别
@@ -270,6 +292,63 @@ class AsrSdk {
           _streamController?.close();
           _isListening = false;
         });
+  }
+
+  /// 内部开始识别（带时间戳）
+  static void _beginRecognitionWithTimestamps() {
+    if (_recorder == null) {
+      _timestampStreamController?.addError(StateError('服务未启动'));
+      _timestampStreamController?.close();
+      _isListening = false;
+      return;
+    }
+
+    // 重新创建 recorder 以注册时间戳回调
+    _recorder?.dispose();
+    _recorder = AsrRecorder(
+      onPartialResult: (text) {
+        // 不使用纯文本流
+      },
+      onFinalResult: (text) {
+        // 不使用纯文本流
+      },
+      onPartialResultWithTimestamps: (result) {
+        _timestampStreamController?.add(result);
+      },
+      onFinalResultWithTimestamps: (result) {
+        _timestampStreamController?.add(result);
+        _timestampStreamController?.close();
+        _isListening = false;
+      },
+      onError: (error) {
+        _logError('ASR SDK: 时间戳识别错误 - $error');
+        _timestampStreamController?.addError(error);
+        _timestampStreamController?.close();
+        _isListening = false;
+      },
+      onStateChanged: (state) {
+        _log('ASR SDK: 录音器状态 - $state');
+      },
+    );
+
+    if (_logger != null) {
+      _recorder!.setLogger(_logger!);
+    }
+
+    _recorder!.initialize().then((success) {
+      if (!success) {
+        throw Exception('录音器初始化失败');
+      }
+      _asrService.reset();
+      return _recorder!.startRecording();
+    }).then((_) {
+      _log('ASR SDK: 开始时间戳识别');
+    }).catchError((e) {
+      _logError('ASR SDK: 启动时间戳识别失败 - $e');
+      _timestampStreamController?.addError(e);
+      _timestampStreamController?.close();
+      _isListening = false;
+    });
   }
 
   /// 结束语音识别（不销毁录音器，可再次 recognize）

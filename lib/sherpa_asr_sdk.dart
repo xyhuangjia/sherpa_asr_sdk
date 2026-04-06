@@ -33,6 +33,7 @@
 library;
 
 export 'src/asr_sdk.dart';
+export 'src/asr_result.dart';
 export 'src/asr_state.dart';
 export 'src/asr_config.dart';
 export 'src/asr_callbacks.dart';

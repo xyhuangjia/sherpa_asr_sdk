@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
 import 'asr_config.dart';
+import 'asr_result.dart';
 import 'asr_state.dart';
 import 'model/sherpa_models_manager.dart';
 import 'utils/asr_logger.dart';
@@ -28,6 +29,9 @@ class AsrService {
 
   final StreamController<String> _resultController =
       StreamController<String>.broadcast();
+
+  final StreamController<AsrResult> _resultWithTimestampsController =
+      StreamController<AsrResult>.broadcast();
 
   final StreamController<double> _progressController =
       StreamController<double>.broadcast();
@@ -83,6 +87,10 @@ class AsrService {
 
   /// 识别结果流
   Stream<String> get resultStream => _resultController.stream;
+
+  /// 带时间戳的识别结果流
+  Stream<AsrResult> get resultWithTimestampsStream =>
+      _resultWithTimestampsController.stream;
 
   /// 初始化进度流
   Stream<double> get progressStream => _progressController.stream;
@@ -362,12 +370,26 @@ class AsrService {
       while (_sherpaRecognizer!.isReady(_stream!)) {
         _sherpaRecognizer!.decode(_stream!);
       }
-      final text = _sherpaRecognizer!.getResult(_stream!).text;
+      final sherpaResult = _sherpaRecognizer!.getResult(_stream!);
+      final text = sherpaResult.text;
       final fullText = _accumulatedText + text;
+      final isEndpoint = _sherpaRecognizer!.isEndpoint(_stream!);
+
       if (fullText.isNotEmpty) {
         _resultController.add(fullText);
+
+        // 构建带时间戳的结果
+        final asrTimestamps = AsrTimestamp.fromTokensAndTimestamps(
+          sherpaResult.tokens,
+          sherpaResult.timestamps,
+        );
+        _resultWithTimestampsController.add(AsrResult(
+          text: fullText,
+          timestamps: asrTimestamps,
+          isFinal: isEndpoint,
+        ));
       }
-      if (_sherpaRecognizer!.isEndpoint(_stream!)) {
+      if (isEndpoint) {
         _sherpaRecognizer!.reset(_stream!);
         if (text.isNotEmpty) {
           _accumulatedText = fullText;
@@ -550,6 +572,7 @@ class AsrService {
     await _speakerStateController.close();
     await _stateController.close();
     await _resultController.close();
+    await _resultWithTimestampsController.close();
     await _progressController.close();
     await _statusController.close();
 

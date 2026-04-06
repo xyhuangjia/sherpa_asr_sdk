@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:record/record.dart';
 
 import 'asr_config.dart';
+import 'asr_result.dart';
 import 'asr_service.dart';
 import 'asr_state.dart';
 import 'utils/asr_logger.dart';
@@ -16,10 +17,13 @@ class AsrRecorder {
   final Function(String) onFinalResult;
   final Function(String)? onError;
   final Function(AsrRecorderState)? onStateChanged;
+  final Function(AsrResult)? onPartialResultWithTimestamps;
+  final Function(AsrResult)? onFinalResultWithTimestamps;
 
   final AudioRecorder _audioRecorder = AudioRecorder();
   StreamSubscription<List<int>>? _streamSubscription;
   StreamSubscription<String>? _resultSubscription;
+  StreamSubscription<AsrResult>? _resultWithTimestampsSubscription;
   bool _isRecording = false;
   DateTime? _startTime;
   AsrRecorderState _state = AsrRecorderState.idle;
@@ -32,6 +36,8 @@ class AsrRecorder {
     required this.onFinalResult,
     this.onError,
     this.onStateChanged,
+    this.onPartialResultWithTimestamps,
+    this.onFinalResultWithTimestamps,
   });
 
   void setLogger(AsrLogger logger) {
@@ -99,6 +105,20 @@ class AsrRecorder {
         },
       );
 
+      if (onPartialResultWithTimestamps != null) {
+        _resultWithTimestampsSubscription =
+            _asrService!.resultWithTimestampsStream.listen(
+          (result) {
+            _log('ASR: 带时间戳识别结果 - ${result.text}');
+            onPartialResultWithTimestamps!(result);
+          },
+          onError: (e) {
+            _log('ASR: 时间戳识别错误 - $e');
+            onError?.call('时间戳识别错误: $e');
+          },
+        );
+      }
+
       const config = RecordConfig(
         encoder: AudioEncoder.pcm16bits,
         sampleRate: AsrConfig.targetSampleRate,
@@ -142,6 +162,8 @@ class AsrRecorder {
       final result = await _asrService!.stopRecognition();
       await _resultSubscription?.cancel();
       _resultSubscription = null;
+      await _resultWithTimestampsSubscription?.cancel();
+      _resultWithTimestampsSubscription = null;
       if (result != null && result.isNotEmpty) {
         _log('ASR: 最终结果 - $result');
         onFinalResult(result);
@@ -166,6 +188,8 @@ class AsrRecorder {
       _streamSubscription = null;
       await _resultSubscription?.cancel();
       _resultSubscription = null;
+      await _resultWithTimestampsSubscription?.cancel();
+      _resultWithTimestampsSubscription = null;
       await _audioRecorder.stop();
       await _asrService!.cancelRecognition();
       _isRecording = false;
@@ -184,6 +208,8 @@ class AsrRecorder {
     _streamSubscription = null;
     _resultSubscription?.cancel();
     _resultSubscription = null;
+    _resultWithTimestampsSubscription?.cancel();
+    _resultWithTimestampsSubscription = null;
     if (_isRecording) {
       try {
         await _audioRecorder.stop();
