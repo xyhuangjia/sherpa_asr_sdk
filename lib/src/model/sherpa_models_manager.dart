@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:archive/archive.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
@@ -33,13 +32,15 @@ class SherpaModelsManager {
 
   void _log(String message) {
     _logger?.debug(message);
-    debugPrint(message);
   }
 
   /// 初始化管理器
   Future<void> initialize() async {
-    await _initializeDirectories();
-    await _copyAssetsModelIfNeeded();
+    // 并行执行：目录初始化和 assets 复制
+    await Future.wait([
+      _initializeDirectories(),
+      _copyAssetsModelIfNeeded(),
+    ]);
   }
 
   /// 将 assets 中预置的模型文件复制到文件系统
@@ -66,6 +67,13 @@ class SherpaModelsManager {
     }
   }
 
+  /// 懒加载目录，避免重复初始化
+  Future<void> _ensureDirectories() async {
+    if (_modelsRootDir == null) {
+      await _initializeDirectories();
+    }
+  }
+
   /// 初始化目录结构
   Future<void> _initializeDirectories() async {
     final appDocDir = await getApplicationDocumentsDirectory();
@@ -86,33 +94,22 @@ class SherpaModelsManager {
       '${_modelsRootDir!.path}/${AsrConfig.speakerReidModelDirName}',
     );
 
-    if (!await _modelsRootDir!.exists()) {
-      await _modelsRootDir!.create(recursive: true);
-    }
-    if (!await _baseModelDir!.exists()) {
-      await _baseModelDir!.create(recursive: true);
-    }
-    if (!await _advancedModelDir!.exists()) {
-      await _advancedModelDir!.create(recursive: true);
-    }
-    if (!await _streamingBilingualModelDir!.exists()) {
-      await _streamingBilingualModelDir!.create(recursive: true);
-    }
-    if (!await _vadModelDir!.exists()) {
-      await _vadModelDir!.create(recursive: true);
-    }
-    if (!await _speakerReidModelDir!.exists()) {
-      await _speakerReidModelDir!.create(recursive: true);
-    }
+    // 并行创建所有目录
+    await Future.wait([
+      _modelsRootDir!.create(recursive: true),
+      _baseModelDir!.create(recursive: true),
+      _advancedModelDir!.create(recursive: true),
+      _streamingBilingualModelDir!.create(recursive: true),
+      _vadModelDir!.create(recursive: true),
+      _speakerReidModelDir!.create(recursive: true),
+    ]);
   }
 
   // ==================== 模型检查 ====================
 
   /// 检查基础模型是否存在
   Future<bool> hasBaseModel() async {
-    if (_baseModelDir == null) {
-      await _initializeDirectories();
-    }
+    await _ensureDirectories();
     return await _hasAnyModelType(_baseModelDir!);
   }
 
@@ -122,13 +119,15 @@ class SherpaModelsManager {
     }
 
     final ctcModel = File('${modelDir.path}/model.int8.onnx');
-    if (await ctcModel.exists() && await ctcModel.length() > 0) {
-      return true;
+    if (await ctcModel.exists()) {
+      final len = await ctcModel.length();
+      if (len > 0) return true;
     }
 
     final encoderModel = File('${modelDir.path}/encoder-epoch-20-avg-1.onnx');
-    if (await encoderModel.exists() && await encoderModel.length() > 0) {
-      return true;
+    if (await encoderModel.exists()) {
+      final len = await encoderModel.length();
+      if (len > 0) return true;
     }
 
     return false;
@@ -136,18 +135,17 @@ class SherpaModelsManager {
 
   /// 检查 VAD 模型是否存在
   Future<bool> hasVadModel() async {
-    if (_vadModelDir == null) {
-      await _initializeDirectories();
-    }
+    await _ensureDirectories();
     final vadModel = File('${_vadModelDir!.path}/silero_vad.onnx');
-    return await vadModel.exists() && await vadModel.length() > 0;
+    if (await vadModel.exists()) {
+      return await vadModel.length() > 0;
+    }
+    return false;
   }
 
   /// 检查说话人识别模型是否存在
   Future<bool> hasSpeakerReidModel() async {
-    if (_speakerReidModelDir == null) {
-      await _initializeDirectories();
-    }
+    await _ensureDirectories();
     if (!await _speakerReidModelDir!.exists()) {
       return false;
     }
@@ -156,6 +154,7 @@ class SherpaModelsManager {
   }
 
   Future<String> _detectModelType() async {
+    await _ensureDirectories();
     if (_baseModelDir == null || !await _baseModelDir!.exists()) {
       return 'unknown';
     }
@@ -177,9 +176,7 @@ class SherpaModelsManager {
 
   /// 检查高级模型是否存在
   Future<bool> hasAdvancedModel() async {
-    if (_advancedModelDir == null) {
-      await _initializeDirectories();
-    }
+    await _ensureDirectories();
     return await _validateModelFiles(
       _advancedModelDir!,
       AsrConfig.advancedModelFiles,
@@ -188,9 +185,7 @@ class SherpaModelsManager {
 
   /// 检查流式中英模型是否存在
   Future<bool> hasStreamingBilingualModel() async {
-    if (_streamingBilingualModelDir == null) {
-      await _initializeDirectories();
-    }
+    await _ensureDirectories();
     return await _validateModelFiles(
       _streamingBilingualModelDir!,
       AsrConfig.streamingBilingualModelFiles,
@@ -205,22 +200,23 @@ class SherpaModelsManager {
       return false;
     }
 
-    for (final fileName in requiredFiles) {
-      _log('检查模型文件: ${modelDir.path}/$fileName');
+    // 并行检查所有文件
+    final results = await Future.wait(requiredFiles.map((fileName) async {
       final file = File('${modelDir.path}/$fileName');
-      if (!await file.exists()) {
+      final exists = await file.exists();
+      if (!exists) {
         _log('模型文件缺失: $fileName');
         return false;
       }
-
       final fileSize = await file.length();
       if (fileSize == 0) {
         _log('模型文件为空: $fileName');
         return false;
       }
-    }
+      return true;
+    }));
 
-    return true;
+    return results.every((r) => r);
   }
 
   // ==================== 模型获取 ====================
@@ -620,6 +616,93 @@ class SherpaModelsManager {
       return true;
     } catch (e) {
       _log('下载模型失败: $e');
+      onStatusChange?.call('下载失败: $e');
+      return false;
+    }
+  }
+
+  /// 下载 Speaker ReID 模型（用于多人说话人区分）
+  Future<bool> downloadSpeakerReidModel({
+    Function(double progress)? onProgress,
+    Function(String status)? onStatusChange,
+  }) async {
+    try {
+      onStatusChange?.call('正在下载说话人识别模型...');
+
+      if (await hasSpeakerReidModel()) {
+        onStatusChange?.call('清理旧模型...');
+        await _deleteDirectory(_speakerReidModelDir!);
+        await _speakerReidModelDir!.create(recursive: true);
+      }
+
+      // 使用压缩包下载方式
+      final tempDir = Directory.systemTemp;
+      final archiveFile = File('${tempDir.path}/sherpa_speaker_reid.tar.bz2');
+
+      final downloadSuccess = await _downloadFile(
+        url: AsrConfig.speakerReidModelArchiveUrl,
+        savePath: archiveFile.path,
+        onProgress: (p) => onProgress?.call(p * 0.6),
+      );
+
+      if (!downloadSuccess) {
+        onStatusChange?.call('压缩包下载失败');
+        return false;
+      }
+
+      onStatusChange?.call('正在解压...');
+      onProgress?.call(0.6);
+
+      final extractDir = Directory('${tempDir.path}/sherpa_speaker_reid_extract');
+      if (await extractDir.exists()) {
+        await _deleteDirectory(extractDir);
+      }
+      await extractDir.create(recursive: true);
+
+      final extractOk = await _extractTarBz2(
+        archiveFile: archiveFile,
+        targetDir: extractDir,
+        onProgress: (p) => onProgress?.call(0.6 + p * 0.3),
+      );
+
+      if (await archiveFile.exists()) {
+        await archiveFile.delete();
+      }
+
+      if (!extractOk) {
+        onStatusChange?.call('解压失败');
+        return false;
+      }
+
+      // 查找 model.onnx 并复制到目标目录
+      final subdirs = await extractDir.list().where((e) => e is Directory).toList();
+      if (subdirs.isEmpty) {
+        onStatusChange?.call('压缩包格式异常');
+        return false;
+      }
+
+      final innerDir = subdirs.first as Directory;
+      if (await _speakerReidModelDir!.exists()) {
+        await _deleteDirectory(_speakerReidModelDir!);
+      }
+      await _speakerReidModelDir!.create(recursive: true);
+
+      // 复制 model.onnx
+      await for (final entity in innerDir.list()) {
+        if (entity is File && entity.path.endsWith('.onnx')) {
+          final name = entity.path.split(RegExp(r'[/\\]')).last;
+          await entity.copy('${_speakerReidModelDir!.path}/$name');
+          _log('已复制说话人模型文件: $name');
+        }
+      }
+
+      await _deleteDirectory(extractDir);
+
+      onStatusChange?.call('说话人识别模型下载完成');
+      onProgress?.call(1.0);
+      return await hasSpeakerReidModel();
+    } catch (e) {
+      _log('下载说话人识别模型失败: $e');
       onStatusChange?.call('下载失败: $e');
       return false;
     }

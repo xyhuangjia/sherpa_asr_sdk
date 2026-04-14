@@ -43,3 +43,4 @@ export 'src/vad/asr_vad_config.dart';
 export 'src/vad/asr_vad_state.dart';
 export 'src/speaker/asr_speaker_config.dart';
 export 'src/speaker/speaker_data_storage.dart';
+export 'src/speaker/asr_diarizer.dart';

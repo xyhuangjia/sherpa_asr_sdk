@@ -128,6 +128,20 @@ class AsrConfig {
   /// 说话人识别模型目录名称
   static const String speakerReidModelDirName = 'speaker_reid_model';
 
+  /// Speaker ReID 模型版本
+  static const String speakerReidModelVersion =
+      'sherpa-onnx-3dspeaker-speech-eres2net-base-26k';
+
+  /// Speaker ReID 模型文件列表
+  static const List<String> speakerReidModelFiles = [
+    'model.onnx',
+  ];
+
+  /// Speaker ReID 模型压缩包 URL
+  static const String speakerReidModelArchiveUrl =
+      'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/'
+      'sherpa-onnx-3dspeaker-speech-eres2net-base-26k-2024-01-17.tar.bz2';
+
   /// 预置模型 assets 路径
   static const String assetsModelPath =
       'packages/sherpa_asr_sdk/assets/models/sherpa-onnx/base';

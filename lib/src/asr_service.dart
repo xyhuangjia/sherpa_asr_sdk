@@ -12,6 +12,7 @@ import 'utils/asr_logger.dart';
 import 'vad/asr_vad_config.dart';
 import 'vad/asr_vad_state.dart';
 import 'speaker/asr_speaker_config.dart';
+import 'speaker/asr_diarizer.dart';
 import 'speaker/speaker_data_storage.dart';
 
 /// ASR 服务
@@ -71,7 +72,6 @@ class AsrService {
 
   // Speaker ID 活跃流管理
   sherpa_onnx.OnlineStream? _speakerStream;
-  final List<Float32List> _speakerEmbeddingBuffer = [];
 
   // Speaker ID 状态流
   final StreamController<String> _speakerStateController =
@@ -81,6 +81,29 @@ class AsrService {
   // Speaker ID 配置和状态
   AsrSpeakerConfig get speakerConfig => _speakerConfig;
   bool get isSpeakerIdEnabled => _isSpeakerIdEnabled;
+
+  // ==================== Diarization (多人说话人自动聚类) ====================
+
+  AsrDiarizer? _diarizer;
+  AsrDiarizationConfig _diarizationConfig = const AsrDiarizationConfig();
+  bool _isDiarizationEnabled = false;
+  String? _currentSpeakerLabel;
+  sherpa_onnx.OnlineStream? _diarizationSpeakerStream;
+
+  final StreamController<String?> _diarizationStateController =
+      StreamController<String?>.broadcast();
+
+  Stream<String?> get speakerChangeStream => _diarizationStateController.stream;
+  bool get isDiarizationEnabled => _isDiarizationEnabled;
+  String? get currentSpeakerLabel => _currentSpeakerLabel;
+  int get activeSpeakerCount => _diarizer?.speakerCount ?? 0;
+  List<IdentifiedSpeaker> get activeSpeakers => _diarizer?.speakers ?? [];
+
+  Future<void> setDiarizationConfig(AsrDiarizationConfig config) async {
+    _diarizationConfig = config;
+    _diarizer?.updateConfig(config);
+    _log('ASR: 说话人自动聚类配置已更新 - $config');
+  }
 
   /// 状态流
   Stream<AsrState> get stateStream => _stateController.stream;
@@ -407,6 +430,9 @@ class AsrService {
         _stream != null) {
       _sherpaRecognizer!.reset(_stream!);
     }
+    if (_isDiarizationEnabled) {
+      resetDiarization();
+    }
     _log('ASR: 识别器已重置');
   }
 
@@ -507,9 +533,15 @@ class AsrService {
           // 创建新的识别流
           _stream?.free();
           _stream = _sherpaRecognizer?.createStream();
+
+          // 创建 Speaker Stream 并开始收集音频
+          _startDiarizationSegment();
         } else {
           _vadStateController.add(VadState.speechInProgress);
         }
+
+        // 喂音频给 Speaker Stream（Diarization）
+        _feedDiarizationAudio(float32);
 
         // 处理音频（空值检查）
         if (_sherpaRecognizer != null && _stream != null) {
@@ -518,7 +550,6 @@ class AsrService {
       } else {
         // VAD 未检测到语音，可能是静音
         if (_isSpeechDetected) {
-          // 之前检测到语音，现在变为静音，可能是语音结束
           _vadStateController.add(VadState.silence);
         }
       }
@@ -532,14 +563,22 @@ class AsrService {
           _vadStateController.add(VadState.speechEnded);
           _log('ASR VAD: 检测到语音结束');
 
-          // 获取最终识别结果（空值检查）
+          // 提取说话人特征并识别
+          _identifySpeakerAtSegmentEnd();
+
+          // 获取最终识别结果
           if (_sherpaRecognizer != null && _stream != null) {
             final text = _sherpaRecognizer!.getResult(_stream!).text;
             if (text.isNotEmpty) {
-              _resultController.add(text);
+              final result = AsrResult(
+                text: text,
+                timestamps: [],
+                isFinal: true,
+                speakerLabel: _currentSpeakerLabel,
+              );
+              _resultController.add(result.labeledText);
             }
 
-            // 重置识别流
             _stream?.free();
             _stream = _sherpaRecognizer?.createStream();
           }
@@ -570,6 +609,7 @@ class AsrService {
     // 关闭所有流控制器
     await _vadStateController.close();
     await _speakerStateController.close();
+    await _diarizationStateController.close();
     await _stateController.close();
     await _resultController.close();
     await _resultWithTimestampsController.close();
@@ -882,6 +922,157 @@ class AsrService {
   void resetSpeakerId() {
     _speakerStream?.free();
     _speakerStream = null;
-    _speakerEmbeddingBuffer.clear();
+  }
+
+  // ==================== Diarization (多人说话人自动聚类) ====================
+
+  /// 启用/禁用说话人自动聚类
+  Future<void> enableDiarization(bool enabled) async {
+    _isDiarizationEnabled = enabled;
+    if (enabled) {
+      await _initializeDiarization();
+    } else {
+      _diarizer?.reset();
+      _diarizer = null;
+      _diarizationSpeakerStream?.free();
+      _diarizationSpeakerStream = null;
+    }
+    _log('ASR: 说话人自动聚类已${enabled ? "启用" : "禁用"}');
+  }
+
+  /// 初始化 Diarization（自动下载并初始化 Speaker Extractor）
+  Future<void> _initializeDiarization() async {
+    // 检查模型是否存在，不存在则下载
+    if (!await SherpaModelsManager.instance.hasSpeakerReidModel()) {
+      _log('ASR: 说话人识别模型不存在，开始下载...');
+      _statusController.add('下载说话人识别模型...');
+      final downloadOk = await SherpaModelsManager.instance.downloadSpeakerReidModel(
+        onProgress: (p) => _progressController.add(p),
+        onStatusChange: (s) => _statusController.add(s),
+      );
+      if (!downloadOk) {
+        _log('ASR: Speaker ReID 模型下载失败');
+        _statusController.add('模型下载失败');
+        _isDiarizationEnabled = false;
+        return;
+      }
+    }
+
+    // 初始化 Speaker Extractor（如果还没初始化）
+    if (_speakerExtractor == null) {
+      final success = await _initSpeakerExtractorForDiarization();
+      if (!success) {
+        _log('ASR: Speaker Extractor 初始化失败，Diarization 不可用');
+        _isDiarizationEnabled = false;
+        return;
+      }
+    }
+
+    // 创建 Diarizer
+    _diarizer = AsrDiarizer(_diarizationConfig);
+    _log('ASR: 说话人自动聚类器已初始化');
+  }
+
+  /// 为 Diarization 初始化 Speaker Extractor
+  Future<bool> _initSpeakerExtractorForDiarization() async {
+    try {
+      String? reidModelPath =
+          await SherpaModelsManager.instance.getSpeakerReidModelPath();
+
+      if (reidModelPath == null) {
+        _log('ASR: 说话人识别模型未找到，Diarization 不可用');
+        return false;
+      }
+
+      final extractorConfig = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+        model: '$reidModelPath/model.onnx',
+        numThreads: 1,
+        debug: true,
+        provider: 'cpu',
+      );
+
+      _speakerExtractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+        config: extractorConfig,
+      );
+
+      _log('ASR: Speaker Extractor 初始化成功，维度：${_speakerExtractor!.dim}');
+      return true;
+    } catch (e) {
+      _log('ASR: Speaker Extractor 初始化失败 - $e');
+      return false;
+    }
+  }
+
+  /// 语音段开始时创建 Speaker Stream
+  void _startDiarizationSegment() {
+    if (!_isDiarizationEnabled || _speakerExtractor == null) return;
+
+    _diarizationSpeakerStream?.free();
+    _diarizationSpeakerStream = _speakerExtractor!.createStream();
+  }
+
+  /// 处理音频时喂给 Speaker Stream
+  void _feedDiarizationAudio(Float32List samples) {
+    if (!_isDiarizationEnabled || _diarizationSpeakerStream == null) return;
+
+    try {
+      _diarizationSpeakerStream!.acceptWaveform(
+        samples: samples,
+        sampleRate: AsrConfig.targetSampleRate,
+      );
+    } catch (e) {
+      _log('ASR: Diarization 音频喂入失败 - $e');
+    }
+  }
+
+  /// 语音段结束时提取说话人特征并识别
+  void _identifySpeakerAtSegmentEnd() {
+    if (!_isDiarizationEnabled ||
+        _speakerExtractor == null ||
+        _diarizationSpeakerStream == null) {
+      return;
+    }
+
+    try {
+      if (!_speakerExtractor!.isReady(_diarizationSpeakerStream!)) {
+        _diarizationSpeakerStream?.free();
+        _diarizationSpeakerStream = null;
+        return;
+      }
+
+      final embedding = _speakerExtractor!.compute(_diarizationSpeakerStream!);
+      _diarizationSpeakerStream?.free();
+      _diarizationSpeakerStream = null;
+
+      if (embedding.isEmpty) {
+        _log('ASR: 说话人特征提取失败');
+        return;
+      }
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch / 1000.0;
+      final duration = _recognitionStartTime != null
+          ? DateTime.now().difference(_recognitionStartTime!).inSeconds.toDouble()
+          : 0.0;
+
+      final label = _diarizer!.identifySpeaker(embedding, duration, timestamp);
+
+      if (_currentSpeakerLabel != label) {
+        _currentSpeakerLabel = label;
+        _diarizationStateController.add(label);
+        _log('ASR: 说话人切换 -> $label');
+      }
+    } catch (e) {
+      _log('ASR: 说话人识别失败 - $e');
+    }
+  }
+
+  /// 重置说话人自动聚类状态
+  void resetDiarization() {
+    _diarizer?.reset();
+    _currentSpeakerLabel = null;
+    _diarizationSpeakerStream?.free();
+    _diarizationSpeakerStream = null;
+    _diarizationStateController.add(null);
+    _log('ASR: 说话人自动聚类状态已重置');
   }
 }

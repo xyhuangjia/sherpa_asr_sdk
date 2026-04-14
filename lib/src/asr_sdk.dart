@@ -9,6 +9,7 @@ import 'utils/asr_logger.dart';
 import 'vad/asr_vad_config.dart';
 import 'vad/asr_vad_state.dart';
 import 'speaker/asr_speaker_config.dart';
+import 'speaker/asr_diarizer.dart';
 
 /// ASR SDK 全局服务
 ///
@@ -462,6 +463,46 @@ class AsrSdk {
   /// 获取已注册说话人数量
   static Future<int> getSpeakerCount() async {
     return await _asrService.getSpeakerCount();
+  }
+
+  // ==================== Diarization (多人说话人自动聚类) ====================
+
+  /// 说话人变化流（多人场景）
+  ///
+  /// 当检测到不同说话人时，流会发出新的说话人标签
+  static Stream<String?> get speakerChangeStream =>
+      _asrService.speakerChangeStream;
+
+  /// 是否启用说话人自动聚类
+  static bool get isDiarizationEnabled => _asrService.isDiarizationEnabled;
+
+  /// 当前说话人标签
+  static String? get currentSpeakerLabel => _asrService.currentSpeakerLabel;
+
+  /// 已识别的说话人数量
+  static int get activeSpeakerCount => _asrService.activeSpeakerCount;
+
+  /// 获取所有已识别说话人
+  static List<IdentifiedSpeaker> get activeSpeakers => _asrService.activeSpeakers;
+
+  /// 启用/禁用说话人自动聚类
+  ///
+  /// 启用后，SDK 会自动识别不同说话人并标记为 Speaker 1, Speaker 2 等
+  /// 需要配合 VAD 使用才能发挥最佳效果
+  static Future<void> enableDiarization(bool enabled) async {
+    await _asrService.enableDiarization(enabled);
+  }
+
+  /// 设置说话人自动聚类配置
+  static Future<void> setDiarizationConfig(AsrDiarizationConfig config) async {
+    await _asrService.setDiarizationConfig(config);
+  }
+
+  /// 重置说话人自动聚类状态
+  ///
+  /// 清空已识别的说话人，重新开始聚类
+  static void resetDiarization() {
+    _asrService.resetDiarization();
   }
 
   // ==================== 状态查询 ====================

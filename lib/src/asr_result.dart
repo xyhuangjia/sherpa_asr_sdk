@@ -74,12 +74,50 @@ class AsrResult {
   /// 是否为最终结果（端点检测后为 true）
   final bool isFinal;
 
+  /// 说话人标签（多人场景，如 "Speaker 1"）
+  /// 为 null 表示未启用说话人聚类
+  final String? speakerLabel;
+
+  /// 语音段在录音中的起始时间（秒）
+  /// 多人场景下表示这段话什么时候开始
+  final double segmentStart;
+
+  /// 语音段在录音中的结束时间（秒）
+  /// 多人场景下表示这段话什么时候结束
+  final double segmentEnd;
+
   const AsrResult({
     required this.text,
     required this.timestamps,
     required this.isFinal,
+    this.speakerLabel,
+    this.segmentStart = 0.0,
+    this.segmentEnd = 0.0,
   });
 
+  /// 带说话人标签和时间戳的显示文本
+  /// 格式: "[Speaker 1] 你好 (00:15)"
+  String get labeledText {
+    final speaker = speakerLabel != null ? '[$speakerLabel] ' : '';
+    final timeStr = segmentStart > 0 ? ' (${_formatTime(segmentStart)})' : '';
+    return '$speaker$text$timeStr';
+  }
+
+  static String _formatTime(double seconds) {
+    final mins = seconds ~/ 60;
+    final secs = seconds.truncate() % 60;
+    return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
   @override
-  String toString() => 'AsrResult(text: $text, timestamps: ${timestamps.length}, isFinal: $isFinal)';
+  String toString() {
+    final parts = [
+      'text: $text',
+      'timestamps: ${timestamps.length}',
+      'isFinal: $isFinal',
+      if (speakerLabel != null) 'speaker: $speakerLabel',
+      if (segmentStart > 0) 'segment: ${_formatTime(segmentStart)}-${_formatTime(segmentEnd)}',
+    ];
+    return 'AsrResult(${parts.join(', ')})';
+  }
 }
