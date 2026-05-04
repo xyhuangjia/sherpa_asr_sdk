@@ -277,8 +277,100 @@ class SherpaModelsManager {
 
   // ==================== 模型下载 ====================
 
-  static const String _hfModelRepo =
-      'csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-02-23';
+  /// 公共下载+解压流程
+  Future<bool> _downloadAndExtract({
+    required String archiveUrl,
+    required Directory targetDir,
+    required String tempName,
+    bool Function(String fileName)? fileFilter,
+    Function(double progress)? onProgress,
+    Function(String status)? onStatus,
+    Future<bool> Function()? validate,
+  }) async {
+    try {
+      onStatus?.call('正在下载模型...');
+
+      if (validate != null && await validate()) {
+        onStatus?.call('清理旧模型...');
+        await _deleteDirectory(targetDir);
+        await targetDir.create(recursive: true);
+      }
+
+      final tempDir = Directory.systemTemp;
+      final archiveFile = File('${tempDir.path}/$tempName.tar.bz2');
+
+      final downloadOk = await _downloadFile(
+        url: archiveUrl,
+        savePath: archiveFile.path,
+        onProgress: (p) => onProgress?.call(p * 0.6),
+      );
+      if (!downloadOk) {
+        onStatus?.call('压缩包下载失败');
+        return false;
+      }
+
+      onStatus?.call('正在解压...');
+      onProgress?.call(0.6);
+
+      final extractDir = Directory('${tempDir.path}/${tempName}_extract');
+      if (await extractDir.exists()) {
+        await _deleteDirectory(extractDir);
+      }
+      await extractDir.create(recursive: true);
+
+      final extractOk = await _extractTarBz2(
+        archiveFile: archiveFile,
+        targetDir: extractDir,
+        onProgress: (p) => onProgress?.call(0.6 + p * 0.3),
+      );
+
+      if (await archiveFile.exists()) {
+        await archiveFile.delete();
+      }
+
+      if (!extractOk) {
+        onStatus?.call('解压失败');
+        return false;
+      }
+
+      final subdirs =
+          await extractDir.list().where((e) => e is Directory).toList();
+      if (subdirs.isEmpty) {
+        onStatus?.call('压缩包格式异常');
+        return false;
+      }
+
+      final innerDir = subdirs.first as Directory;
+      if (await targetDir.exists()) {
+        await _deleteDirectory(targetDir);
+      }
+      await targetDir.create(recursive: true);
+
+      await for (final entity in innerDir.list()) {
+        if (entity is File) {
+          final name = entity.path.split(RegExp(r'[/\\]')).last;
+          if (fileFilter == null || fileFilter(name)) {
+            await entity.copy('${targetDir.path}/$name');
+            _log('已复制模型文件: $name');
+          }
+        }
+      }
+
+      await _deleteDirectory(extractDir);
+
+      onStatus?.call('模型下载完成');
+      onProgress?.call(1.0);
+
+      if (validate != null) {
+        return await validate();
+      }
+      return true;
+    } catch (e) {
+      _log('下载模型失败: $e');
+      onStatus?.call('下载失败: $e');
+      return false;
+    }
+  }
 
   Future<bool> _downloadBaseModelArchive({
     Function(double progress)? onProgress,
@@ -420,77 +512,7 @@ class SherpaModelsManager {
         onStatusChange: onStatusChange,
       );
 
-      if (success) {
-        return true;
-      }
-
-      onStatusChange?.call('切换下载方式...');
-      return await downloadBaseModelsLegacy(
-        onProgress: onProgress,
-        onStatusChange: onStatusChange,
-      );
-    } catch (e) {
-      _log('下载基础模型失败: $e');
-      onStatusChange?.call('下载失败: $e');
-      return false;
-    }
-  }
-
-  /// 下载基础模型（旧版逐文件方式）
-  Future<bool> downloadBaseModelsLegacy({
-    Function(double progress)? onProgress,
-    Function(String status)? onStatusChange,
-  }) async {
-    try {
-      onStatusChange?.call('准备下载基础模型...');
-
-      if (await hasBaseModel()) {
-        onStatusChange?.call('清理旧模型...');
-        await _deleteDirectory(_baseModelDir!);
-        await _baseModelDir!.create(recursive: true);
-      }
-
-      final modelFiles = [
-        'encoder-epoch-20-avg-1.onnx',
-        'decoder-epoch-20-avg-1.onnx',
-        'joiner-epoch-20-avg-1.onnx',
-        'tokens.txt',
-        'lang.txt',
-      ];
-
-      final totalFiles = modelFiles.length;
-      int completedFiles = 0;
-
-      for (final fileName in modelFiles) {
-        onStatusChange?.call('正在下载: $fileName');
-
-        final url = _getBaseModelDownloadUrl(fileName);
-        final savePath = '${_baseModelDir!.path}/$fileName';
-
-        final success = await _downloadFileWithRetry(
-          url: url,
-          savePath: savePath,
-          onProgress: (progress) {
-            final fileProgress = progress / totalFiles;
-            final overallProgress =
-                (completedFiles + fileProgress) / totalFiles;
-            onProgress?.call(overallProgress);
-          },
-        );
-
-        if (!success) {
-          onStatusChange?.call('下载失败: $fileName');
-          await _deleteDirectory(_baseModelDir!);
-          await _baseModelDir!.create(recursive: true);
-          return false;
-        }
-
-        completedFiles++;
-        onProgress?.call(completedFiles / totalFiles);
-      }
-
-      onStatusChange?.call('基础模型下载完成');
-      return true;
+      return success;
     } catch (e) {
       _log('下载基础模型失败: $e');
       onStatusChange?.call('下载失败: $e');
@@ -503,71 +525,17 @@ class SherpaModelsManager {
     Function(double progress)? onProgress,
     Function(String status)? onStatusChange,
   }) async {
-    try {
-      if (_streamingBilingualModelDir == null) {
-        await _initializeDirectories();
-      }
-      onStatusChange?.call('正在下载流式中英模型...');
-      final tempDir = Directory.systemTemp;
-      final archiveFile = File(
-        '${tempDir.path}/sherpa_streaming_bilingual.tar.bz2',
-      );
-      final downloadSuccess = await _downloadFile(
-        url: AsrConfig.streamingBilingualModelArchiveUrl,
-        savePath: archiveFile.path,
-        onProgress: (p) => onProgress?.call(p * 0.6),
-      );
-      if (!downloadSuccess) {
-        onStatusChange?.call('压缩包下载失败');
-        return false;
-      }
-      onStatusChange?.call('正在解压...');
-      onProgress?.call(0.6);
-      final extractDir = Directory('${tempDir.path}/sherpa_streaming_extract');
-      if (await extractDir.exists()) {
-        await _deleteDirectory(extractDir);
-      }
-      await extractDir.create(recursive: true);
-      final extractOk = await _extractTarBz2(
-        archiveFile: archiveFile,
-        targetDir: extractDir,
-        onProgress: (p) => onProgress?.call(0.6 + p * 0.3),
-      );
-      if (await archiveFile.exists()) {
-        await archiveFile.delete();
-      }
-      if (!extractOk) {
-        onStatusChange?.call('解压失败');
-        return false;
-      }
-      final subdirs = await extractDir
-          .list()
-          .where((e) => e is Directory)
-          .toList();
-      if (subdirs.isEmpty) {
-        onStatusChange?.call('压缩包格式异常');
-        return false;
-      }
-      final innerDir = subdirs.first as Directory;
-      if (await _streamingBilingualModelDir!.exists()) {
-        await _deleteDirectory(_streamingBilingualModelDir!);
-        await _streamingBilingualModelDir!.create(recursive: true);
-      }
-      await for (final entity in innerDir.list()) {
-        if (entity is File) {
-          final name = entity.path.split(RegExp(r'[/\\]')).last;
-          await entity.copy('${_streamingBilingualModelDir!.path}/$name');
-        }
-      }
-      await _deleteDirectory(extractDir);
-      onStatusChange?.call('模型下载完成');
-      onProgress?.call(1.0);
-      return await hasStreamingBilingualModel();
-    } catch (e) {
-      _log('下载流式中英模型失败: $e');
-      onStatusChange?.call('下载失败: $e');
-      return false;
+    if (_streamingBilingualModelDir == null) {
+      await _initializeDirectories();
     }
+    return await _downloadAndExtract(
+      archiveUrl: AsrConfig.streamingBilingualModelArchiveUrl,
+      targetDir: _streamingBilingualModelDir!,
+      tempName: 'sherpa_streaming_bilingual',
+      onProgress: onProgress,
+      onStatus: onStatusChange,
+      validate: hasStreamingBilingualModel,
+    );
   }
 
   /// 下载高级模型
@@ -626,125 +594,15 @@ class SherpaModelsManager {
     Function(double progress)? onProgress,
     Function(String status)? onStatusChange,
   }) async {
-    try {
-      onStatusChange?.call('正在下载说话人识别模型...');
-
-      if (await hasSpeakerReidModel()) {
-        onStatusChange?.call('清理旧模型...');
-        await _deleteDirectory(_speakerReidModelDir!);
-        await _speakerReidModelDir!.create(recursive: true);
-      }
-
-      // 使用压缩包下载方式
-      final tempDir = Directory.systemTemp;
-      final archiveFile = File('${tempDir.path}/sherpa_speaker_reid.tar.bz2');
-
-      final downloadSuccess = await _downloadFile(
-        url: AsrConfig.speakerReidModelArchiveUrl,
-        savePath: archiveFile.path,
-        onProgress: (p) => onProgress?.call(p * 0.6),
-      );
-
-      if (!downloadSuccess) {
-        onStatusChange?.call('压缩包下载失败');
-        return false;
-      }
-
-      onStatusChange?.call('正在解压...');
-      onProgress?.call(0.6);
-
-      final extractDir = Directory('${tempDir.path}/sherpa_speaker_reid_extract');
-      if (await extractDir.exists()) {
-        await _deleteDirectory(extractDir);
-      }
-      await extractDir.create(recursive: true);
-
-      final extractOk = await _extractTarBz2(
-        archiveFile: archiveFile,
-        targetDir: extractDir,
-        onProgress: (p) => onProgress?.call(0.6 + p * 0.3),
-      );
-
-      if (await archiveFile.exists()) {
-        await archiveFile.delete();
-      }
-
-      if (!extractOk) {
-        onStatusChange?.call('解压失败');
-        return false;
-      }
-
-      // 查找 model.onnx 并复制到目标目录
-      final subdirs = await extractDir.list().where((e) => e is Directory).toList();
-      if (subdirs.isEmpty) {
-        onStatusChange?.call('压缩包格式异常');
-        return false;
-      }
-
-      final innerDir = subdirs.first as Directory;
-      if (await _speakerReidModelDir!.exists()) {
-        await _deleteDirectory(_speakerReidModelDir!);
-      }
-      await _speakerReidModelDir!.create(recursive: true);
-
-      // 复制 model.onnx
-      await for (final entity in innerDir.list()) {
-        if (entity is File && entity.path.endsWith('.onnx')) {
-          final name = entity.path.split(RegExp(r'[/\\]')).last;
-          await entity.copy('${_speakerReidModelDir!.path}/$name');
-          _log('已复制说话人模型文件: $name');
-        }
-      }
-
-      await _deleteDirectory(extractDir);
-
-      onStatusChange?.call('说话人识别模型下载完成');
-      onProgress?.call(1.0);
-      return await hasSpeakerReidModel();
-    } catch (e) {
-      _log('下载说话人识别模型失败: $e');
-      onStatusChange?.call('下载失败: $e');
-      return false;
-    }
-  }
-
-  Future<bool> _downloadFileWithRetry({
-    required String url,
-    required String savePath,
-    Function(double progress)? onProgress,
-  }) async {
-    final uri = Uri.parse(url);
-    final pathParts = uri.path.split('/');
-    if (pathParts.length < 3) {
-      return false;
-    }
-
-    final repoIndex = pathParts.indexWhere((p) => p.contains('sherpa-onnx'));
-    if (repoIndex < 0) {
-      return await _downloadFile(
-        url: url,
-        savePath: savePath,
-        onProgress: onProgress,
-      );
-    }
-
-    final repo = pathParts.sublist(repoIndex).join('/');
-    final fileName = pathParts.last;
-
-    final mirrors = ['https://hf-mirror.com', 'https://huggingface.co'];
-
-    for (final mirror in mirrors) {
-      final mirrorUrl = '$mirror/$repo/resolve/main/$fileName';
-      if (await _downloadFile(
-        url: mirrorUrl,
-        savePath: savePath,
-        onProgress: onProgress,
-      )) {
-        return true;
-      }
-    }
-
-    return false;
+    return await _downloadAndExtract(
+      archiveUrl: AsrConfig.speakerReidModelArchiveUrl,
+      targetDir: _speakerReidModelDir!,
+      tempName: 'sherpa_speaker_reid',
+      fileFilter: (name) => name.endsWith('.onnx'),
+      onProgress: onProgress,
+      onStatus: onStatusChange,
+      validate: hasSpeakerReidModel,
+    );
   }
 
   Future<bool> _downloadFile({
@@ -771,11 +629,6 @@ class SherpaModelsManager {
       _log('下载文件失败: $url, 错误: $e');
       return false;
     }
-  }
-
-  String _getBaseModelDownloadUrl(String fileName) {
-    final mirrors = ['https://hf-mirror.com', 'https://huggingface.co'];
-    return '${mirrors[0]}/$_hfModelRepo/resolve/main/$fileName';
   }
 
   // ==================== 模型删除 ====================

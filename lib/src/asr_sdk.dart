@@ -281,6 +281,24 @@ class AsrSdk {
       return;
     }
 
+    // 确保回调指向文本流
+    _recorder!.updateCallbacks(
+      onPartialResult: (text) {
+        _streamController?.add(text);
+      },
+      onFinalResult: (text) {
+        _streamController?.add(text);
+        _streamController?.close();
+        _isListening = false;
+      },
+      onError: (error) {
+        _logError('ASR SDK: 识别错误 - $error');
+        _streamController?.addError(error);
+        _streamController?.close();
+        _isListening = false;
+      },
+    );
+
     _asrService.reset();
     _recorder!
         .startRecording()
@@ -304,15 +322,10 @@ class AsrSdk {
       return;
     }
 
-    // 重新创建 recorder 以注册时间戳回调
-    _recorder?.dispose();
-    _recorder = AsrRecorder(
-      onPartialResult: (text) {
-        // 不使用纯文本流
-      },
-      onFinalResult: (text) {
-        // 不使用纯文本流
-      },
+    // 只替换回调，不重建录音器
+    _recorder!.updateCallbacks(
+      onPartialResult: (_) {},
+      onFinalResult: (_) {},
       onPartialResultWithTimestamps: (result) {
         _timestampStreamController?.add(result);
       },
@@ -327,29 +340,20 @@ class AsrSdk {
         _timestampStreamController?.close();
         _isListening = false;
       },
-      onStateChanged: (state) {
-        _log('ASR SDK: 录音器状态 - $state');
-      },
     );
 
-    if (_logger != null) {
-      _recorder!.setLogger(_logger!);
-    }
-
-    _recorder!.initialize().then((success) {
-      if (!success) {
-        throw Exception('录音器初始化失败');
-      }
-      _asrService.reset();
-      return _recorder!.startRecording();
-    }).then((_) {
-      _log('ASR SDK: 开始时间戳识别');
-    }).catchError((e) {
-      _logError('ASR SDK: 启动时间戳识别失败 - $e');
-      _timestampStreamController?.addError(e);
-      _timestampStreamController?.close();
-      _isListening = false;
-    });
+    _asrService.reset();
+    _recorder!
+        .startRecording()
+        .then((_) {
+          _log('ASR SDK: 开始时间戳识别');
+        })
+        .catchError((e) {
+          _logError('ASR SDK: 启动时间戳识别失败 - $e');
+          _timestampStreamController?.addError(e);
+          _timestampStreamController?.close();
+          _isListening = false;
+        });
   }
 
   /// 结束语音识别（不销毁录音器，可再次 recognize）

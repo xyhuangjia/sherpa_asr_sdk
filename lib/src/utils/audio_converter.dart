@@ -33,8 +33,12 @@ class AudioConverter {
   }
 
   /// 将 int16 转换为 float32（归一化到 [-1, 1]）
-  static List<double> int16ToFloat32(List<int> int16Data) {
-    return int16Data.map((sample) => sample / 32768.0).toList();
+  static Float32List int16ToFloat32(List<int> int16Data) {
+    final result = Float32List(int16Data.length);
+    for (int i = 0; i < int16Data.length; i++) {
+      result[i] = int16Data[i] / 32768.0;
+    }
+    return result;
   }
 
   /// 将 float32 转换回 int16
@@ -45,14 +49,14 @@ class AudioConverter {
   }
 
   /// 线性插值重采样
-  static List<double> resample(List<int> samples, int fromRate, int toRate) {
+  static Float32List resample(List<int> samples, int fromRate, int toRate) {
     if (fromRate == toRate) {
       return int16ToFloat32(samples);
     }
 
     final ratio = fromRate / toRate;
     final outputLength = (samples.length / ratio).ceil();
-    final result = List<double>.filled(outputLength, 0.0);
+    final result = Float32List(outputLength);
 
     for (int i = 0; i < outputLength; i++) {
       final position = i * ratio;
@@ -72,7 +76,7 @@ class AudioConverter {
   }
 
   /// 将 PCM16 转换为 16000Hz Float32
-  static List<double> convertPcm16ToFloat32(
+  static Float32List convertPcm16ToFloat32(
     List<int> pcm16Data,
     int sourceSampleRate,
   ) {

@@ -4,10 +4,11 @@ import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../utils/asr_logger.dart';
+
 /// 说话人数据持久化存储
 ///
 /// 使用文件系统存储说话人的 Embedding 向量
-/// 使用 SharedPreferences 存储说话人姓名列表（待实现）
 class SpeakerDataStorage {
   static final SpeakerDataStorage _instance =
       SpeakerDataStorage._internal();
@@ -16,6 +17,11 @@ class SpeakerDataStorage {
 
   Directory? _storageDir;
   final Map<String, Float32List> _cache = {};
+  AsrLogger? _logger;
+
+  void setLogger(AsrLogger logger) {
+    _logger = logger;
+  }
 
   /// 初始化存储目录
   Future<void> initialize() async {
@@ -181,10 +187,10 @@ class SpeakerDataStorage {
   }
 
   void _log(String message) {
-    print('[SpeakerStorage] $message');
+    _logger?.debug('[SpeakerStorage] $message');
   }
 
   void _logError(String message) {
-    print('[SpeakerStorage] ERROR: $message');
+    _logger?.error('[SpeakerStorage] $message');
   }
 }

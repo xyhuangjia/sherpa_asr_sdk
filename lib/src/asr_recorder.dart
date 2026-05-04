@@ -13,12 +13,12 @@ import 'utils/audio_converter.dart';
 /// ASR 录音识别器
 /// 使用 record 包获取 16kHz PCM 流，送入 Sherpa-onnx 流式识别
 class AsrRecorder {
-  final Function(String) onPartialResult;
-  final Function(String) onFinalResult;
-  final Function(String)? onError;
-  final Function(AsrRecorderState)? onStateChanged;
-  final Function(AsrResult)? onPartialResultWithTimestamps;
-  final Function(AsrResult)? onFinalResultWithTimestamps;
+  Function(String) _onPartialResult;
+  Function(String) _onFinalResult;
+  Function(String)? _onError;
+  Function(AsrRecorderState)? _onStateChanged;
+  Function(AsrResult)? _onPartialResultWithTimestamps;
+  Function(AsrResult)? _onFinalResultWithTimestamps;
 
   final AudioRecorder _audioRecorder = AudioRecorder();
   StreamSubscription<List<int>>? _streamSubscription;
@@ -32,13 +32,39 @@ class AsrRecorder {
   AsrLogger? _logger;
 
   AsrRecorder({
-    required this.onPartialResult,
-    required this.onFinalResult,
-    this.onError,
-    this.onStateChanged,
-    this.onPartialResultWithTimestamps,
-    this.onFinalResultWithTimestamps,
-  });
+    required Function(String) onPartialResult,
+    required Function(String) onFinalResult,
+    Function(String)? onError,
+    Function(AsrRecorderState)? onStateChanged,
+    Function(AsrResult)? onPartialResultWithTimestamps,
+    Function(AsrResult)? onFinalResultWithTimestamps,
+  })  : _onPartialResult = onPartialResult,
+        _onFinalResult = onFinalResult,
+        _onError = onError,
+        _onStateChanged = onStateChanged,
+        _onPartialResultWithTimestamps = onPartialResultWithTimestamps,
+        _onFinalResultWithTimestamps = onFinalResultWithTimestamps;
+
+  /// 替换回调（不重建录音器）
+  void updateCallbacks({
+    Function(String)? onPartialResult,
+    Function(String)? onFinalResult,
+    Function(String)? onError,
+    Function(AsrRecorderState)? onStateChanged,
+    Function(AsrResult)? onPartialResultWithTimestamps,
+    Function(AsrResult)? onFinalResultWithTimestamps,
+  }) {
+    if (onPartialResult != null) _onPartialResult = onPartialResult;
+    if (onFinalResult != null) _onFinalResult = onFinalResult;
+    if (onError != null) _onError = onError;
+    if (onStateChanged != null) _onStateChanged = onStateChanged;
+    if (onPartialResultWithTimestamps != null) {
+      _onPartialResultWithTimestamps = onPartialResultWithTimestamps;
+    }
+    if (onFinalResultWithTimestamps != null) {
+      _onFinalResultWithTimestamps = onFinalResultWithTimestamps;
+    }
+  }
 
   void setLogger(AsrLogger logger) {
     _logger = logger;
@@ -58,7 +84,7 @@ class AsrRecorder {
   void _updateState(AsrRecorderState newState) {
     if (_state != newState) {
       _state = newState;
-      onStateChanged?.call(newState);
+      _onStateChanged?.call(newState);
     }
   }
 
@@ -69,7 +95,7 @@ class AsrRecorder {
       return true;
     } catch (e) {
       _log('ASR: 录音器初始化失败 - $e');
-      onError?.call('录音器初始化失败: $e');
+      _onError?.call('录音器初始化失败: $e');
       return false;
     }
   }
@@ -97,24 +123,24 @@ class AsrRecorder {
       _resultSubscription = _asrService!.resultStream.listen(
         (text) {
           _log('ASR: 识别结果 - $text');
-          onPartialResult(text);
+          _onPartialResult(text);
         },
         onError: (e) {
           _log('ASR: 识别错误 - $e');
-          onError?.call('识别错误: $e');
+          _onError?.call('识别错误: $e');
         },
       );
 
-      if (onPartialResultWithTimestamps != null) {
+      if (_onPartialResultWithTimestamps != null) {
         _resultWithTimestampsSubscription =
             _asrService!.resultWithTimestampsStream.listen(
           (result) {
             _log('ASR: 带时间戳识别结果 - ${result.text}');
-            onPartialResultWithTimestamps!(result);
+            _onPartialResultWithTimestamps!(result);
           },
           onError: (e) {
             _log('ASR: 时间戳识别错误 - $e');
-            onError?.call('时间戳识别错误: $e');
+            _onError?.call('时间戳识别错误: $e');
           },
         );
       }
@@ -130,11 +156,11 @@ class AsrRecorder {
           final float32 = AudioConverter.convertBytesToFloat32(
             Uint8List.fromList(data),
           );
-          _asrService!.acceptAudio(float32.toList());
+          _asrService!.acceptAudio(float32);
         },
         onError: (e) {
           _log('ASR: 录音流错误 - $e');
-          onError?.call('录音异常: $e');
+          _onError?.call('录音异常: $e');
         },
       );
       _isRecording = true;
@@ -143,7 +169,7 @@ class AsrRecorder {
       _log('ASR: 开始录音识别');
     } catch (e) {
       _log('ASR: 开始录音失败 - $e');
-      onError?.call('开始录音失败: $e');
+      _onError?.call('开始录音失败: $e');
       _updateState(AsrRecorderState.error);
       await _cleanup();
     }
@@ -166,7 +192,10 @@ class AsrRecorder {
       _resultWithTimestampsSubscription = null;
       if (result != null && result.isNotEmpty) {
         _log('ASR: 最终结果 - $result');
-        onFinalResult(result);
+        _onFinalResult(result);
+        _onFinalResultWithTimestamps?.call(
+          AsrResult(text: result, timestamps: const [], isFinal: true),
+        );
       }
       _isRecording = false;
       _startTime = null;
@@ -174,7 +203,7 @@ class AsrRecorder {
       _log('ASR: 停止录音识别');
     } catch (e) {
       _log('ASR: 停止录音失败 - $e');
-      onError?.call('停止录音失败: $e');
+      _onError?.call('停止录音失败: $e');
       _updateState(AsrRecorderState.error);
       await _cleanup();
     }
