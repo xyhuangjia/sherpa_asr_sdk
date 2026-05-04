@@ -17,6 +17,7 @@ class AudioPlayerService {
   AudioPlayerService._internal();
 
   final AudioPlayer _player = AudioPlayer();
+  StreamSubscription? _playerStateSubscription;
 
   final StreamController<PlayerState> _stateController =
       StreamController<PlayerState>.broadcast();
@@ -38,8 +39,8 @@ class AudioPlayerService {
       await _player.play();
       _updateState(PlayerState.playing);
 
-      // 监听播放完成
-      _player.playerStateStream.listen((state) {
+      _playerStateSubscription?.cancel();
+      _playerStateSubscription = _player.playerStateStream.listen((state) {
         if (state.processingState == ProcessingState.completed) {
           _updateState(PlayerState.completed);
         }
@@ -75,6 +76,7 @@ class AudioPlayerService {
 
   /// 释放资源
   Future<void> dispose() async {
+    _playerStateSubscription?.cancel();
     await _player.dispose();
     await _stateController.close();
   }

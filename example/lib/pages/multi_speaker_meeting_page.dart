@@ -9,6 +9,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:sherpa_asr_sdk/sherpa_asr_sdk.dart';
 
+import '../utils/format_utils.dart';
+
 /// 说话人颜色调色板
 /// 为不同说话人分配不同的颜色，便于视觉区分
 const _speakerColors = [
@@ -86,11 +88,7 @@ class _MultiSpeakerMeetingPageState extends State<MultiSpeakerMeetingPage> {
   }
 
   void _listenToStateChanges() {
-    _stateSubscription = AsrSdk.stateStream.listen((state) {
-      if (mounted) {
-        setState(() {});
-      }
-    });
+    _stateSubscription = AsrSdk.stateStream.listen((_) {});
   }
 
   void _listenToSpeakerChanges() {
@@ -213,31 +211,8 @@ class _MultiSpeakerMeetingPageState extends State<MultiSpeakerMeetingPage> {
     }
   }
 
-  // 将当前部分文本添加到转录中（保留供未来使用）
-  // ignore: unused_element
-  void _addCurrentPartialToTranscript() {
-    if (_partialText.isEmpty) return;
-
-    final segment = _TranscriptSegment(
-      speakerLabel: _currentSpeaker,
-      text: _partialText,
-      timestamp: DateTime.now(),
-    );
-
-    setState(() {
-      _transcript.add(segment);
-      _partialText = '';
-    });
-  }
-
   void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  String _formatDuration(int seconds) {
-    final minutes = seconds ~/ 60;
-    final secs = seconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+    showSnackBar(context, message);
   }
 
   @override
@@ -337,7 +312,7 @@ class _MultiSpeakerMeetingPageState extends State<MultiSpeakerMeetingPage> {
               if (_isListening) ...[
                 const Spacer(),
                 Text(
-                  _formatDuration(_recordingDuration),
+                  formatDuration(_recordingDuration),
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
@@ -553,7 +528,7 @@ class _MultiSpeakerMeetingPageState extends State<MultiSpeakerMeetingPage> {
               ),
               const Spacer(),
               Text(
-                _formatTime(segment.timestamp),
+                formatTime(segment.timestamp),
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
@@ -636,12 +611,6 @@ class _MultiSpeakerMeetingPageState extends State<MultiSpeakerMeetingPage> {
       return int.parse(match.group(1)!) - 1;
     }
     return 0;
-  }
-
-  String _formatTime(DateTime time) {
-    final hour = time.hour.toString().padLeft(2, '0');
-    final minute = time.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
   }
 
   void _showSpeakerStats() {
@@ -764,7 +733,9 @@ class _PulseIndicatorState extends State<PulseIndicator>
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     )..repeat();
-    _animation = Tween<double>(begin: 0.0, end: 1.0).animate(_controller);
+    _animation = Tween<double>(begin: 0.4, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
   }
 
   @override
@@ -772,12 +743,15 @@ class _PulseIndicatorState extends State<PulseIndicator>
     return AnimatedBuilder(
       animation: _animation,
       builder: (context, child) {
-        return Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: widget.color,
-            shape: BoxShape.circle,
+        return Opacity(
+          opacity: _animation.value,
+          child: Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: widget.color,
+              shape: BoxShape.circle,
+            ),
           ),
         );
       },

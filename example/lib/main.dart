@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:sherpa_asr_sdk/sherpa_asr_sdk.dart';
 
 import 'pages/multi_speaker_meeting_page.dart';
+import 'utils/format_utils.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -162,7 +163,7 @@ class _HomePageState extends State<HomePage> {
           _status = 'Error: $error';
           _isListening = false;
         });
-        _showSnackBar('Recognition error: $error');
+        showSnackBar(context, 'Recognition error: $error');
       },
       onDone: () {
         _recordingTimer?.cancel();
@@ -198,23 +199,6 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  void _showSnackBar(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  String _formatDuration(int seconds) {
-    final minutes = seconds ~/ 60;
-    final secs = seconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-  }
-
-  String _formatTime(DateTime time) {
-    final hour = time.hour.toString().padLeft(2, '0');
-    final minute = time.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -532,7 +516,7 @@ class _HomePageState extends State<HomePage> {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          _formatDuration(_recordingDuration),
+                          formatDuration(_recordingDuration),
                           style: Theme.of(context).textTheme.labelSmall
                               ?.copyWith(
                                 color: Theme.of(context).colorScheme.primary,
@@ -588,7 +572,7 @@ class _HomePageState extends State<HomePage> {
                   TextButton.icon(
                     onPressed: () {
                       // TODO: 实现复制功能
-                      _showSnackBar('Copy feature coming soon');
+                      showSnackBar(context, 'Copy feature coming soon');
                     },
                     icon: const Icon(Icons.copy_all_rounded, size: 16),
                     label: const Text('Copy'),
@@ -597,7 +581,7 @@ class _HomePageState extends State<HomePage> {
                   TextButton.icon(
                     onPressed: () {
                       // TODO: 实现语音回放功能
-                      _showSnackBar('Audio playback feature coming soon');
+                      showSnackBar(context, 'Audio playback feature coming soon');
                     },
                     icon: const Icon(Icons.play_arrow_rounded, size: 16),
                     label: const Text('Play Audio'),
@@ -636,7 +620,7 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(width: 4),
               Text(
-                _formatTime(record.timestamp),
+                formatTime(record.timestamp),
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -649,7 +633,7 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(width: 4),
               Text(
-                _formatDuration(record.duration),
+                formatDuration(record.duration),
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -662,7 +646,7 @@ class _HomePageState extends State<HomePage> {
                   IconButton(
                     onPressed: () {
                       // TODO: 实现语音回放
-                      _showSnackBar('Audio playback coming soon');
+                      showSnackBar(context, 'Audio playback coming soon');
                     },
                     icon: const Icon(Icons.play_arrow_rounded, size: 18),
                     tooltip: 'Play Audio',
@@ -673,7 +657,7 @@ class _HomePageState extends State<HomePage> {
                   IconButton(
                     onPressed: () {
                       // TODO: 实现复制
-                      _showSnackBar('Copy feature coming soon');
+                      showSnackBar(context, 'Copy feature coming soon');
                     },
                     icon: const Icon(Icons.copy_all_rounded, size: 18),
                     tooltip: 'Copy Text',

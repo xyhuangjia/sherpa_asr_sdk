@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:path/path.dart' as p;
+import 'package:sherpa_asr_sdk/sherpa_asr_sdk.dart';
 
 import '../utils/wav_writer.dart';
 
@@ -19,10 +20,10 @@ class AudioRecorderService {
   String? _tempFilePath;
   bool _isRecording = false;
 
-  final StreamController<List<double>> _audioStreamController =
-      StreamController<List<double>>.broadcast();
+  final StreamController<Float32List> _audioStreamController =
+      StreamController<Float32List>.broadcast();
 
-  Stream<List<double>> get audioStream => _audioStreamController.stream;
+  Stream<Float32List> get audioStream => _audioStreamController.stream;
   bool get isRecording => _isRecording;
 
   /// 开始录制
@@ -53,12 +54,9 @@ class AudioRecorderService {
     final stream = await _recorder.startStream(config);
 
     stream.listen((data) {
-      // 写入 WAV 文件
-      _wavWriter!.writePcm16(Uint8List.fromList(data));
-
-      // 转换为 Float32 并发送给识别服务
-      final float32 = _convertPcm16ToFloat32(Uint8List.fromList(data));
-      _audioStreamController.add(float32.toList());
+      final bytes = Uint8List.fromList(data);
+      _wavWriter!.writePcm16(bytes);
+      _audioStreamController.add(AudioConverter.convertBytesToFloat32(bytes));
     });
 
     _isRecording = true;
@@ -92,15 +90,4 @@ class AudioRecorderService {
     await _audioStreamController.close();
   }
 
-  /// 将 PCM16 转换为 Float32
-  List<double> _convertPcm16ToFloat32(Uint8List pcmData) {
-    final int16Data = Int16List.view(pcmData.buffer);
-    final float32Data = Float32List(int16Data.length);
-
-    for (int i = 0; i < int16Data.length; i++) {
-      float32Data[i] = int16Data[i] / 32768.0;
-    }
-
-    return float32Data.toList();
-  }
 }
