@@ -5,7 +5,7 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
 import '../asr_config.dart';
 import '../utils/asr_logger.dart';
-import '../model/sherpa_models_manager.dart';
+import '../utils/sherpa_models_manager.dart';
 import 'asr_diarizer.dart';
 import 'asr_speaker_manager.dart';
 
@@ -75,11 +75,11 @@ class AsrDiarizationManager {
     // 检查模型是否存在，不存在则下载
     if (!await SherpaModelsManager.instance.hasSpeakerReidModel()) {
       _log('ASR Diarization: 模型不存在，开始下载...');
-      final downloadOk =
-          await SherpaModelsManager.instance.downloadSpeakerReidModel(
-        onProgress: (p) {},
-        onStatusChange: (s) => _log('ASR Diarization: $s'),
-      );
+      final downloadOk = await SherpaModelsManager.instance
+          .downloadSpeakerReidModel(
+            onProgress: (p) {},
+            onStatusChange: (s) => _log('ASR Diarization: $s'),
+          );
       if (!downloadOk) {
         _log('ASR Diarization: 模型下载失败');
         _isEnabled = false;
@@ -138,8 +138,7 @@ class AsrDiarizationManager {
         return;
       }
 
-      final embedding =
-          _speakerManager.extractor!.compute(_diarizationStream!);
+      final embedding = _speakerManager.extractor!.compute(_diarizationStream!);
       _diarizationStream?.free();
       _diarizationStream = null;
 
@@ -151,9 +150,9 @@ class AsrDiarizationManager {
       final timestamp = DateTime.now().millisecondsSinceEpoch / 1000.0;
       final duration = _recognitionStartTime != null
           ? DateTime.now()
-              .difference(_recognitionStartTime!)
-              .inSeconds
-              .toDouble()
+                .difference(_recognitionStartTime!)
+                .inSeconds
+                .toDouble()
           : 0.0;
 
       final label = _diarizer!.identifySpeaker(embedding, duration, timestamp);

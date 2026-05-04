@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'asr_recorder.dart';
-import 'asr_result.dart';
+import 'model/asr_result.dart';
 import 'asr_service.dart';
-import 'asr_state.dart';
+import 'model/asr_state.dart';
 import 'utils/asr_logger.dart';
 import 'vad/asr_vad_config.dart';
 import 'vad/asr_vad_state.dart';
@@ -83,7 +83,8 @@ class AsrSdk {
   // ==================== Speaker ID 相关 ====================
 
   /// Speaker ID 状态流
-  static Stream<String> get speakerStateStream => _asrService.speakerStateStream;
+  static Stream<String> get speakerStateStream =>
+      _asrService.speakerStateStream;
 
   /// 是否启用 Speaker ID
   static bool get isSpeakerIdEnabled => _asrService.isSpeakerIdEnabled;
@@ -487,7 +488,8 @@ class AsrSdk {
   static int get activeSpeakerCount => _asrService.activeSpeakerCount;
 
   /// 获取所有已识别说话人
-  static List<IdentifiedSpeaker> get activeSpeakers => _asrService.activeSpeakers;
+  static List<IdentifiedSpeaker> get activeSpeakers =>
+      _asrService.activeSpeakers;
 
   /// 启用/禁用说话人自动聚类
   ///

@@ -4,9 +4,9 @@ import 'dart:typed_data';
 import 'package:record/record.dart';
 
 import 'asr_config.dart';
-import 'asr_result.dart';
+import 'model/asr_result.dart';
 import 'asr_service.dart';
-import 'asr_state.dart';
+import 'model/asr_state.dart';
 import 'utils/asr_logger.dart';
 import 'utils/audio_converter.dart';
 
@@ -38,12 +38,12 @@ class AsrRecorder {
     Function(AsrRecorderState)? onStateChanged,
     Function(AsrResult)? onPartialResultWithTimestamps,
     Function(AsrResult)? onFinalResultWithTimestamps,
-  })  : _onPartialResult = onPartialResult,
-        _onFinalResult = onFinalResult,
-        _onError = onError,
-        _onStateChanged = onStateChanged,
-        _onPartialResultWithTimestamps = onPartialResultWithTimestamps,
-        _onFinalResultWithTimestamps = onFinalResultWithTimestamps;
+  }) : _onPartialResult = onPartialResult,
+       _onFinalResult = onFinalResult,
+       _onError = onError,
+       _onStateChanged = onStateChanged,
+       _onPartialResultWithTimestamps = onPartialResultWithTimestamps,
+       _onFinalResultWithTimestamps = onFinalResultWithTimestamps;
 
   /// 替换回调（不重建录音器）
   void updateCallbacks({
@@ -132,17 +132,18 @@ class AsrRecorder {
       );
 
       if (_onPartialResultWithTimestamps != null) {
-        _resultWithTimestampsSubscription =
-            _asrService!.resultWithTimestampsStream.listen(
-          (result) {
-            _log('ASR: 带时间戳识别结果 - ${result.text}');
-            _onPartialResultWithTimestamps!(result);
-          },
-          onError: (e) {
-            _log('ASR: 时间戳识别错误 - $e');
-            _onError?.call('时间戳识别错误: $e');
-          },
-        );
+        _resultWithTimestampsSubscription = _asrService!
+            .resultWithTimestampsStream
+            .listen(
+              (result) {
+                _log('ASR: 带时间戳识别结果 - ${result.text}');
+                _onPartialResultWithTimestamps!(result);
+              },
+              onError: (e) {
+                _log('ASR: 时间戳识别错误 - $e');
+                _onError?.call('时间戳识别错误: $e');
+              },
+            );
       }
 
       const config = RecordConfig(

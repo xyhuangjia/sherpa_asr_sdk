@@ -5,7 +5,7 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
 import '../asr_config.dart';
 import '../utils/asr_logger.dart';
-import '../model/sherpa_models_manager.dart';
+import '../utils/sherpa_models_manager.dart';
 import 'asr_speaker_config.dart';
 import 'speaker_data_storage.dart';
 
@@ -49,8 +49,8 @@ class AsrSpeakerManager {
   /// 创建 Speaker Embedding Extractor
   Future<bool> _createExtractor() async {
     try {
-      String? reidModelPath =
-          await SherpaModelsManager.instance.getSpeakerReidModelPath();
+      String? reidModelPath = await SherpaModelsManager.instance
+          .getSpeakerReidModelPath();
 
       if (reidModelPath == null) {
         _log('ASR Speaker: 说话人识别模型未找到');

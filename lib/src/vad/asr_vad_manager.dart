@@ -6,7 +6,7 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
 import '../asr_config.dart';
 import '../utils/asr_logger.dart';
-import '../model/sherpa_models_manager.dart';
+import '../utils/sherpa_models_manager.dart';
 import '../speaker/asr_diarization_manager.dart';
 import 'asr_vad_config.dart';
 import 'asr_vad_state.dart';
@@ -78,16 +78,15 @@ class AsrVadManager {
     try {
       _vad?.free();
 
-      String? vadModelPath =
-          await SherpaModelsManager.instance.getVadModelPath();
+      String? vadModelPath = await SherpaModelsManager.instance
+          .getVadModelPath();
 
       if (vadModelPath == null) {
         final baseVadFile = File(
           '${await SherpaModelsManager.instance.getBaseModelPath()}/silero_vad.onnx',
         );
         if (await baseVadFile.exists()) {
-          vadModelPath =
-              await SherpaModelsManager.instance.getBaseModelPath();
+          vadModelPath = await SherpaModelsManager.instance.getBaseModelPath();
         }
       }
 

@@ -5,9 +5,9 @@ import 'dart:typed_data';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
 import 'asr_config.dart';
-import 'asr_result.dart';
-import 'asr_state.dart';
-import 'model/sherpa_models_manager.dart';
+import 'model/asr_result.dart';
+import 'model/asr_state.dart';
+import 'utils/sherpa_models_manager.dart';
 import 'utils/asr_logger.dart';
 import 'vad/asr_vad_config.dart';
 import 'vad/asr_vad_manager.dart';
@@ -74,7 +74,8 @@ class AsrService {
   bool get isDiarizationEnabled => _diarizationManager.isEnabled;
   String? get currentSpeakerLabel => _diarizationManager.currentSpeakerLabel;
   int get activeSpeakerCount => _diarizationManager.activeSpeakerCount;
-  List<IdentifiedSpeaker> get activeSpeakers => _diarizationManager.activeSpeakers;
+  List<IdentifiedSpeaker> get activeSpeakers =>
+      _diarizationManager.activeSpeakers;
 
   // 状态
   Stream<AsrState> get stateStream => _stateController.stream;
@@ -146,8 +147,7 @@ class AsrService {
       onProgress?.call(0.2);
       onStatus?.call('检查模型文件...');
 
-      String? modelPath =
-          await SherpaModelsManager.instance.getBestModelPath();
+      String? modelPath = await SherpaModelsManager.instance.getBestModelPath();
       if (modelPath == null) {
         onStatus?.call('准备模型文件...');
         final success = await _downloadModelIfNeeded(
@@ -234,8 +234,9 @@ class AsrService {
   /// 检测当前模型类型
   Future<String> _detectModelType() async {
     if (_modelPath == null) return 'unknown';
-    final streamingEncoder =
-        File('$_modelPath/encoder-epoch-99-avg-1.int8.onnx');
+    final streamingEncoder = File(
+      '$_modelPath/encoder-epoch-99-avg-1.int8.onnx',
+    );
     if (await streamingEncoder.exists()) return 'streaming_transducer';
     final ctcModel = File('$_modelPath/model.int8.onnx');
     if (await ctcModel.exists()) return 'ctc';
@@ -253,9 +254,9 @@ class AsrService {
       onStatus?.call('首次使用，需要下载模型...');
       bool success = await SherpaModelsManager.instance
           .downloadStreamingBilingualModels(
-        onProgress: onProgress,
-        onStatusChange: onStatus,
-      );
+            onProgress: onProgress,
+            onStatusChange: onStatus,
+          );
       if (success) return true;
       success = await SherpaModelsManager.instance.downloadBaseModels(
         onProgress: onProgress,
@@ -369,11 +370,13 @@ class AsrService {
           sherpaResult.tokens,
           sherpaResult.timestamps,
         );
-        _resultWithTimestampsController.add(AsrResult(
-          text: fullText,
-          timestamps: asrTimestamps,
-          isFinal: isEndpoint,
-        ));
+        _resultWithTimestampsController.add(
+          AsrResult(
+            text: fullText,
+            timestamps: asrTimestamps,
+            isFinal: isEndpoint,
+          ),
+        );
       }
       if (isEndpoint) {
         _sherpaRecognizer!.reset(_stream!);

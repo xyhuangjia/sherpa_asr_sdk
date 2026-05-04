@@ -6,7 +6,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 
 import '../asr_config.dart';
-import '../utils/asr_logger.dart';
+import 'asr_logger.dart';
 
 /// Sherpa-onnx 模型管理器
 /// 负责模型的下载、存储、验证和管理
@@ -37,10 +37,7 @@ class SherpaModelsManager {
   /// 初始化管理器
   Future<void> initialize() async {
     // 并行执行：目录初始化和 assets 复制
-    await Future.wait([
-      _initializeDirectories(),
-      _copyAssetsModelIfNeeded(),
-    ]);
+    await Future.wait([_initializeDirectories(), _copyAssetsModelIfNeeded()]);
   }
 
   /// 将 assets 中预置的模型文件复制到文件系统
@@ -201,20 +198,22 @@ class SherpaModelsManager {
     }
 
     // 并行检查所有文件
-    final results = await Future.wait(requiredFiles.map((fileName) async {
-      final file = File('${modelDir.path}/$fileName');
-      final exists = await file.exists();
-      if (!exists) {
-        _log('模型文件缺失: $fileName');
-        return false;
-      }
-      final fileSize = await file.length();
-      if (fileSize == 0) {
-        _log('模型文件为空: $fileName');
-        return false;
-      }
-      return true;
-    }));
+    final results = await Future.wait(
+      requiredFiles.map((fileName) async {
+        final file = File('${modelDir.path}/$fileName');
+        final exists = await file.exists();
+        if (!exists) {
+          _log('模型文件缺失: $fileName');
+          return false;
+        }
+        final fileSize = await file.length();
+        if (fileSize == 0) {
+          _log('模型文件为空: $fileName');
+          return false;
+        }
+        return true;
+      }),
+    );
 
     return results.every((r) => r);
   }
@@ -333,8 +332,10 @@ class SherpaModelsManager {
         return false;
       }
 
-      final subdirs =
-          await extractDir.list().where((e) => e is Directory).toList();
+      final subdirs = await extractDir
+          .list()
+          .where((e) => e is Directory)
+          .toList();
       if (subdirs.isEmpty) {
         onStatus?.call('压缩包格式异常');
         return false;
