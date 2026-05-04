@@ -7,73 +7,66 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 flutter pub get                    # Install dependencies
 flutter test                       # Run all tests
-flutter test test/sherpa_asr_sdk_test.dart  # Run single test file
+flutter test test/asr_result_test.dart  # Run single test file
 flutter analyze                    # Static analysis
 dart format . --set-exit-if-changed  # Format check
+bash scripts/download_model.sh     # Download streaming bilingual model to assets/
 ```
+
+Requires Dart SDK `^3.10.1` and Flutter `>=3.10.0`.
 
 ## Architecture Overview
 
-This is a Flutter SDK for offline speech recognition using Sherpa-Onnx. The architecture follows a layered pattern:
+Flutter SDK for offline speech recognition using Sherpa-Onnx. Layered architecture with strict lifecycle ordering:
 
-**SDK Layer (`AsrSdk`)** - Global singleton providing the public API. Manages lifecycle states and coordinates between components.
+**AsrSdk** (public API singleton) → **AsrService** (Sherpa-Onnx wrapper) → **AsrRecorder** (audio capture via `record` package). `SherpaModelsManager` handles model download/storage independently.
 
-**Service Layer (`AsrService`)** - Singleton that wraps Sherpa-Onnx recognizer. Handles model initialization, streaming recognition, and result processing.
-
-**Recorder Layer (`AsrRecorder`)** - Manages audio capture via `record` package, converts PCM16 to Float32, and feeds to AsrService.
-
-**Model Management (`SherpaModelsManager`)** - Singleton handling model download, storage, and validation. Models stored in app document directory under `sherpa_models/`.
-
-### Lifecycle Workflow
-
-The SDK requires strict lifecycle ordering:
+### Lifecycle (must follow order)
 
 ```
 initialize() → start() → recognize() ⟲ stopRecognition() → stop() → dispose()
-    ↑              ↑           ↑                ↑            ↑         ↑
-  app startup   enter page   begin speech    end speech   leave page  app exit
 ```
 
-Each method must be called in order. `recognize()` returns a `Stream<String>` that emits partial and final results.
+`recognize()` returns `Stream<String>` emitting partial and final results. Breaking lifecycle order causes state errors.
+
+### Modules
+
+- **Core** (`lib/src/`): `asr_sdk.dart`, `asr_service.dart`, `asr_recorder.dart`, `asr_state.dart`, `asr_config.dart`, `asr_callbacks.dart`, `asr_result.dart`
+- **VAD** (`lib/src/vad/`): Voice activity detection config and state — `asr_vad_config.dart`, `asr_vad_state.dart`
+- **Speaker** (`lib/src/speaker/`): Multi-speaker diarization — `asr_diarizer.dart`, `asr_speaker_config.dart`, `speaker_data_storage.dart`
+- **Model** (`lib/src/model/`): `sherpa_models_manager.dart` — download, storage, validation under app doc dir `sherpa_models/`
+- **Utils** (`lib/src/utils/`): `audio_converter.dart` (PCM16→Float32), `asr_logger.dart` (pluggable logging interface)
 
 ### Model Types
 
-- **Streaming Bilingual** (preferred): Chinese-English, ~30MB, files: `encoder-epoch-99-avg-1.int8.onnx`, `decoder-epoch-99-avg-1.onnx`, `joiner-epoch-99-avg-1.onnx`, `tokens.txt`
-- **Base CTC Model**: Chinese only, ~15MB, files: `model.int8.onnx`, `tokens.txt`, `bbpe.model`, `silero_vad.onnx`
-- **Advanced Model**: Higher quality bilingual, ~50MB
+- **Streaming Bilingual** (preferred): Chinese-English, ~30MB. Files: `encoder-epoch-99-avg-1.int8.onnx`, `decoder-epoch-99-avg-1.onnx`, `joiner-epoch-99-avg-1.onnx`, `tokens.txt`
+- **Base CTC**: Chinese only, ~15MB. Files: `model.int8.onnx`, `tokens.txt`, `bbpe.model`, `silero_vad.onnx`
+- **Advanced**: Higher quality bilingual, ~50MB
 
-Models can be bundled in `assets/models/sherpa-onnx/base/` for offline-first deployment, or downloaded on first use via `SherpaModelsManager.downloadStreamingBilingualModels()`.
+Can bundle in `assets/models/sherpa-onnx/base/` for offline-first, or download via `SherpaModelsManager.downloadStreamingBilingualModels()`.
 
-### Audio Parameters
+### Audio
 
-Sherpa-Onnx requires 16kHz mono audio. The `record` package captures PCM16 which is converted to Float32 via `AudioConverter.convertBytesToFloat32()`.
-
-## Key Files
-
-- `lib/src/asr_sdk.dart` - Public API and lifecycle management
-- `lib/src/asr_service.dart` - Sherpa-Onnx integration
-- `lib/src/asr_recorder.dart` - Audio capture and streaming
-- `lib/src/model/sherpa_models_manager.dart` - Model download/storage
-- `lib/src/asr_config.dart` - Constants and configuration
+Sherpa-Onnx requires 16kHz mono. `record` captures PCM16 → `AudioConverter.convertBytesToFloat32()` converts to Float32.
 
 ## Platform Requirements
 
-- **iOS**: Add `NSMicrophoneUsageDescription` to Info.plist
-- **Android**: Add `RECORD_AUDIO` and `INTERNET` permissions to AndroidManifest.xml
+- **iOS**: `NSMicrophoneUsageDescription` in Info.plist
+- **Android**: `RECORD_AUDIO` + `INTERNET` in AndroidManifest.xml
 
 ## Notes
 
-- Comments and logs are in Chinese throughout the codebase
-- Uses singleton pattern for `AsrService` and `SherpaModelsManager`
-- Model files are large; downloads use Dio with 10-minute timeout
-- `AsrLogger` interface allows custom logging implementations
+- Comments/logs in Chinese throughout codebase
+- Singleton pattern: `AsrService`, `SherpaModelsManager`
+- Model downloads use Dio with 10-minute timeout
+- `AsrLogger` interface for custom logging
+- All public types exported via `lib/sherpa_asr_sdk.dart`
+- Example app in `example/` includes multi-speaker meeting page, history storage, audio player
 
 ## Approach
+
 - Think before acting. Read existing files before writing code.
-- Be concise in output but thorough in reasoning.
 - Prefer editing over rewriting whole files.
-- Do not re-read files you have already read unless the file may have changed.
 - Test your code before declaring done.
-- No sycophantic openers or closing fluff.
 - Keep solutions simple and direct.
 - User instructions always override this file.
