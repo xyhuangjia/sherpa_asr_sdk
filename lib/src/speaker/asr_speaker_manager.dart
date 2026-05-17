@@ -37,6 +37,27 @@ class AsrSpeakerManager {
   /// 获取 extractor（供 DiarizationManager 共享）
   sherpa_onnx.SpeakerEmbeddingExtractor? get extractor => _extractor;
 
+  /// 获取所有已注册说话人的 Embedding
+  ///
+  /// 返回 Map<说话人名称, Embedding向量>
+  /// 用于 Diarization 的分层匹配
+  Future<Map<String, Float32List>> getRegisteredEmbeddings() async {
+    final result = <String, Float32List>{};
+    try {
+      final speakers = await _storage.getAllSpeakers();
+      for (final name in speakers) {
+        final embedding = await _storage.loadSpeaker(name);
+        if (embedding != null) {
+          result[name] = embedding;
+        }
+      }
+      _log('ASR Speaker: 已获取 ${result.length} 个已注册说话人的 embedding');
+    } catch (e) {
+      _log('ASR Speaker: 获取已注册 embedding 失败 - $e');
+    }
+    return result;
+  }
+
   void setLogger(AsrLogger logger) {
     _logger = logger;
     _storage.setLogger(logger);

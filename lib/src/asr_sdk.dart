@@ -259,7 +259,7 @@ class AsrSdk {
 
   /// 开始语音识别（带时间戳）
   ///
-  /// 返回 Stream<AsrResult>，包含每个 token 的起始时间和持续时间。
+  /// 返回 `Stream<AsrResult>`，包含每个 token 的起始时间和持续时间。
   /// 与 [recognize] 互斥，同时只能使用其中一个。
   static Stream<AsrResult> recognizeWithTimestamps() {
     _streamController?.close();
@@ -509,6 +509,15 @@ class AsrSdk {
   /// 清空已识别的说话人，重新开始聚类
   static void resetDiarization() {
     _asrService.resetDiarization();
+  }
+
+  /// 刷新 Diarization 的已注册说话人数据
+  ///
+  /// 当注册新用户后调用，使会议中能识别新注册的用户。
+  /// 例如：先 registerSpeaker("张三")，再调用此方法，
+  /// 会议中张三发言时会自动标记为"张三"而非"Speaker N"
+  static Future<void> refreshDiarizationSpeakers() async {
+    await _asrService.refreshDiarizationSpeakers();
   }
 
   // ==================== 状态查询 ====================

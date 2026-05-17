@@ -605,11 +605,28 @@ class _MultiSpeakerMeetingPageState extends State<MultiSpeakerMeetingPage> {
   }
 
   /// 获取说话人颜色索引
+  ///
+  /// 支持两种格式：
+  /// - "Speaker 1", "Speaker 2" 等 → 使用索引
+  /// - 已注册用户名（如 "张三"）→ 使用内部 speaker 的 label 提取索引
   int _getSpeakerColorIndex(String speakerLabel) {
+    // 直接匹配 "Speaker N" 格式
     final match = RegExp(r'Speaker\s*(\d+)').firstMatch(speakerLabel);
     if (match != null) {
       return int.parse(match.group(1)!) - 1;
     }
+
+    // 查找对应的 IdentifiedSpeaker 获取索引
+    final speakers = AsrSdk.activeSpeakers;
+    for (final speaker in speakers) {
+      if (speaker.displayLabel == speakerLabel) {
+        final innerMatch = RegExp(r'Speaker\s*(\d+)').firstMatch(speaker.label);
+        if (innerMatch != null) {
+          return int.parse(innerMatch.group(1)!) - 1;
+        }
+      }
+    }
+
     return 0;
   }
 

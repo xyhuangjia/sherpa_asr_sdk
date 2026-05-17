@@ -502,6 +502,14 @@ class AsrService {
     _diarizationManager.reset();
   }
 
+  /// 刷新 Diarization 的已注册说话人数据
+  ///
+  /// 当注册新用户后调用，使会议中能识别新注册的用户
+  Future<void> refreshDiarizationSpeakers() async {
+    _ensureManagers();
+    await _diarizationManager.refreshRegisteredSpeakers();
+  }
+
   // ==================== 资源释放 ====================
 
   Future<void> dispose() async {

@@ -97,7 +97,11 @@ class AsrDiarizationManager {
       }
     }
 
-    _diarizer = AsrDiarizer(_config);
+    // 获取已注册说话人数据
+    final registeredSpeakers = await _speakerManager.getRegisteredEmbeddings();
+    _log('ASR Diarization: 已注册说话人 ${registeredSpeakers.length} 个');
+
+    _diarizer = AsrDiarizer(_config, registeredSpeakers: registeredSpeakers);
     _log('ASR Diarization: 聚类器已初始化');
   }
 
@@ -175,6 +179,17 @@ class AsrDiarizationManager {
     _diarizationStream = null;
     _stateController.add(null);
     _log('ASR Diarization: 状态已重置');
+  }
+
+  /// 刷新已注册说话人数据
+  ///
+  /// 当会议中途注册新用户时调用，更新分层匹配的已注册数据
+  Future<void> refreshRegisteredSpeakers() async {
+    if (!_isEnabled || _diarizer == null) return;
+
+    final registeredSpeakers = await _speakerManager.getRegisteredEmbeddings();
+    _diarizer!.updateRegisteredSpeakers(registeredSpeakers);
+    _log('ASR Diarization: 已刷新已注册说话人数据 (${registeredSpeakers.length} 个)');
   }
 
   /// 释放资源
