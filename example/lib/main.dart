@@ -1,10 +1,17 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:sherpa_asr_sdk/sherpa_asr_sdk.dart';
 
+import 'models/recognition_record.dart';
 import 'pages/multi_speaker_meeting_page.dart';
+import 'services/audio_recorder_service.dart';
+import 'services/history_storage_service.dart';
 import 'utils/format_utils.dart';
+import 'widgets/audio_player_widget.dart';
+import 'widgets/history_list_widget.dart';
+import 'widgets/waveform_painter.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,14 +28,14 @@ class MyApp extends StatelessWidget {
       title: 'Sherpa ASR Demo',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.indigo,
+          seedColor: Colors.red,
           brightness: Brightness.light,
         ),
         useMaterial3: true,
       ),
       darkTheme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.indigo,
+          seedColor: Colors.red,
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
@@ -39,6 +46,9 @@ class MyApp extends StatelessWidget {
   }
 }
 
+/// 应用页面状态
+enum _PageState { ready, recording, result }
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -46,33 +56,68 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
+  // --- SDK 状态 ---
   AsrSdkState _sdkState = AsrSdkState.notInitialized;
   String _status = 'Not initialized';
-  String _result = '';
-  String _partialResult = '';
   double _initProgress = 0.0;
   double _downloadProgress = 0.0;
   bool _isDownloading = false;
-  bool _isListening = false;
+
+  // --- 页面状态 ---
+  _PageState _pageState = _PageState.ready;
+
+  // --- 录音状态 ---
   int _recordingDuration = 0;
+  String _partialResult = '';
+  String _finalResult = '';
+  String? _audioPath;
   StreamSubscription<AsrSdkState>? _stateSubscription;
   Timer? _recordingTimer;
 
-  // 识别历史记录
-  final List<_RecognitionRecord> _history = [];
+  // --- 动画 ---
+  late AnimationController _waveformController;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+
+  // --- 历史记录 ---
+  List<RecognitionRecord> _history = [];
 
   @override
   void initState() {
     super.initState();
+
+    // 波形动画 — 持续循环
+    _waveformController = AnimationController(
+      duration: const Duration(seconds: 3),
+      vsync: this,
+    );
+
+    // 脉冲动画 — 录音按钮呼吸效果
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 1500),
+      vsync: this,
+    );
+    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.08).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+
     _listenToStateChanges();
-    _initSdk();
+    _initServices();
   }
+
+  // ==================== 初始化 ====================
 
   void _listenToStateChanges() {
     _stateSubscription = AsrSdk.stateStream.listen((state) {
       if (mounted) setState(() => _sdkState = state);
     });
+  }
+
+  Future<void> _initServices() async {
+    await HistoryStorageService.instance.initialize();
+    await _loadHistory();
+    await _initSdk();
   }
 
   Future<void> _initSdk() async {
@@ -137,132 +182,252 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // ==================== 历史记录 ====================
+
+  Future<void> _loadHistory() async {
+    final records = await HistoryStorageService.instance.getAllRecords();
+    if (mounted) setState(() => _history = records);
+  }
+
+  Future<void> _saveRecording() async {
+    if (_finalResult.isEmpty) return;
+
+    final record = RecognitionRecord(
+      text: _finalResult,
+      audioPath: _audioPath ?? '',
+      duration: _recordingDuration,
+      timestamp: DateTime.now(),
+    );
+
+    await HistoryStorageService.instance.insertRecord(record);
+    await _loadHistory();
+  }
+
+  Future<void> _deleteRecord(RecognitionRecord record) async {
+    if (record.id != null) {
+      await HistoryStorageService.instance.deleteRecord(record.id!);
+      await _loadHistory();
+    }
+  }
+
+  Future<void> _toggleFavorite(RecognitionRecord record, bool value) async {
+    if (record.id != null) {
+      await HistoryStorageService.instance.updateFavorite(record.id!, value);
+      await _loadHistory();
+    }
+  }
+
+  // ==================== 录音控制 ====================
+
   void _startRecognition() {
+    HapticFeedback.mediumImpact();
+
     setState(() {
-      _result = '';
       _partialResult = '';
+      _finalResult = '';
+      _audioPath = null;
       _status = 'Listening...';
-      _isListening = true;
+      _pageState = _PageState.recording;
       _recordingDuration = 0;
     });
 
+    // 启动动画
+    _waveformController.repeat();
+    _pulseController.repeat(reverse: true);
+
     // 启动计时器
     _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() => _recordingDuration++);
+      if (mounted) setState(() => _recordingDuration++);
     });
 
+    // 启动音频录制（保存 WAV 文件）
+    AudioRecorderService.instance.startRecording().then((path) {
+      _audioPath = path;
+    }).catchError((_) {});
+
+    // 启动 ASR 识别流
     AsrSdk.recognize().listen(
       (text) {
-        setState(() {
-          _partialResult = text;
-        });
+        if (mounted) {
+          final changed = text != _partialResult;
+          setState(() => _partialResult = text);
+          if (changed) HapticFeedback.selectionClick();
+        }
       },
       onError: (error) {
         _recordingTimer?.cancel();
-        setState(() {
-          _status = 'Error: $error';
-          _isListening = false;
-        });
-        showSnackBar(context, 'Recognition error: $error');
+        _waveformController.stop();
+        _pulseController.stop();
+        AudioRecorderService.instance.cancelRecording();
+        if (mounted) {
+          setState(() {
+            _status = 'Error: $error';
+            _pageState = _PageState.ready;
+          });
+          showSnackBar(context, 'Recognition error: $error');
+        }
       },
       onDone: () {
         _recordingTimer?.cancel();
-        setState(() {
-          if (_partialResult.isNotEmpty) {
-            // 保存到历史记录
-            _history.insert(
-              0,
-              _RecognitionRecord(
-                text: _partialResult,
-                timestamp: DateTime.now(),
-                duration: _recordingDuration,
-              ),
-            );
-            _result = _partialResult;
-          }
-          _partialResult = '';
-          _isListening = false;
-          _status = 'Ready';
-          _recordingDuration = 0;
-        });
+        _waveformController.stop();
+        _pulseController.stop();
+        AudioRecorderService.instance.stopRecording();
+        if (mounted) {
+          setState(() {
+            if (_partialResult.isNotEmpty) {
+              _finalResult = _partialResult;
+              _pageState = _PageState.result;
+              _saveRecording();
+            } else {
+              _pageState = _PageState.ready;
+            }
+            _partialResult = '';
+            _status = 'Ready';
+          });
+        }
       },
     );
   }
 
   Future<void> _stopRecognition() async {
+    HapticFeedback.heavyImpact();
     await AsrSdk.stopRecognition();
     _recordingTimer?.cancel();
+    _waveformController.stop();
+    _pulseController.stop();
+
+    _audioPath = await AudioRecorderService.instance.stopRecording();
+
+    if (mounted) {
+      setState(() {
+        if (_partialResult.isNotEmpty) {
+          _finalResult = _partialResult;
+          _pageState = _PageState.result;
+          _saveRecording();
+        } else {
+          _pageState = _PageState.ready;
+        }
+        _partialResult = '';
+        _status = 'Ready';
+      });
+    }
+  }
+
+  void _resetForNewRecording() {
+    HapticFeedback.lightImpact();
     setState(() {
-      _status = 'Ready';
-      _isListening = false;
-      _recordingDuration = 0;
+      _pageState = _PageState.ready;
+      _finalResult = '';
+      _partialResult = '';
+      _audioPath = null;
     });
   }
 
+  // ==================== 操作 ====================
+
+  void _copyText(String text) {
+    Clipboard.setData(ClipboardData(text: text));
+    HapticFeedback.lightImpact();
+    showSnackBar(context, '已复制到剪贴板');
+  }
+
+  void _playAudio(String audioPath) {
+    if (audioPath.isEmpty) {
+      showSnackBar(context, '无音频文件');
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: AudioPlayerWidget(audioPath: audioPath),
+      ),
+    );
+  }
+
+  // ==================== 构建 ====================
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
-        elevation: 0,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '语音识别',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-            ),
-            Text(
-              _status,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                fontSize: 11,
-                color: Theme.of(
-                  context,
-                ).colorScheme.onSurface.withValues(alpha: 0.6),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.groups_rounded),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const MultiSpeakerMeetingPage(),
-                ),
-              );
-            },
-            tooltip: '多人会议',
-          ),
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: _showInfo,
-            tooltip: 'About',
-          ),
-        ],
-      ),
+      appBar: _buildAppBar(),
       body: Column(
         children: [
-          // 顶部状态卡片
-          _buildStatusSection(),
-
-          // 分割线
-          Divider(
-            height: 1,
-            color: Theme.of(
-              context,
-            ).colorScheme.outlineVariant.withValues(alpha: 0.3),
-          ),
-
-          // 中间内容区域
-          Expanded(child: _buildContentArea()),
-
-          // 底部控制栏
+          if (_pageState != _PageState.recording) _buildStatusSection(),
+          if (_pageState != _PageState.recording)
+            Divider(
+              height: 1,
+              color: Theme.of(
+                context,
+              ).colorScheme.outlineVariant.withValues(alpha: 0.3),
+            ),
+          Expanded(child: _buildBody()),
           _buildControlBar(),
         ],
       ),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar() {
+    final isRecording = _pageState == _PageState.recording;
+
+    return AppBar(
+      backgroundColor: isRecording
+          ? Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.3)
+          : Theme.of(context).colorScheme.surfaceContainer,
+      elevation: 0,
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            isRecording
+                ? '正在录音'
+                : _pageState == _PageState.result
+                    ? '识别完成'
+                    : '语音识别',
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+          ),
+          if (isRecording)
+            Text(
+              formatDuration(_recordingDuration),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                    fontWeight: FontWeight.w600,
+                  ),
+            )
+          else
+            Text(
+              _status,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontSize: 11,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
+            ),
+        ],
+      ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.groups_rounded),
+          onPressed: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => const MultiSpeakerMeetingPage(),
+              ),
+            );
+          },
+          tooltip: '多人会议',
+        ),
+        IconButton(
+          icon: const Icon(Icons.info_outline),
+          onPressed: _showInfo,
+          tooltip: 'About',
+        ),
+      ],
     );
   }
 
@@ -274,7 +439,6 @@ class _HomePageState extends State<HomePage> {
       color: Theme.of(context).colorScheme.surfaceContainer,
       child: Column(
         children: [
-          // SDK 状态指示器
           Row(
             children: [
               Container(
@@ -289,9 +453,9 @@ class _HomePageState extends State<HomePage> {
               Text(
                 _sdkState.name.toUpperCase(),
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: _getStatusColor(),
-                  fontWeight: FontWeight.w600,
-                ),
+                      color: _getStatusColor(),
+                      fontWeight: FontWeight.w600,
+                    ),
               ),
               if (_initProgress > 0 && _initProgress < 1.0) ...[
                 const Spacer(),
@@ -302,8 +466,6 @@ class _HomePageState extends State<HomePage> {
               ],
             ],
           ),
-
-          // 初始化进度条
           if (_initProgress > 0 && _initProgress < 1.0) ...[
             const SizedBox(height: 8),
             ClipRRect(
@@ -317,8 +479,6 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ],
-
-          // 模型下载提示
           if (needsModel && !_isDownloading) ...[
             const SizedBox(height: 12),
             SizedBox(
@@ -337,8 +497,6 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ],
-
-          // 下载进度
           if (_isDownloading) ...[
             const SizedBox(height: 12),
             LinearProgressIndicator(
@@ -359,49 +517,27 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildContentArea() {
-    final hasHistory = _history.isNotEmpty;
+  Widget _buildBody() {
+    switch (_pageState) {
+      case _PageState.recording:
+        return _buildRecordingState();
+      case _PageState.result:
+        return _buildResultState();
+      case _PageState.ready:
+        return _buildReadyState();
+    }
+  }
 
+  // --- 就绪态：历史记录列表 ---
+  Widget _buildReadyState() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 当前识别结果卡片
-          _buildResultCard(),
-
-          const SizedBox(height: 24),
-
-          // 历史记录标题
-          if (hasHistory) ...[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '识别记录',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: () {
-                    setState(() => _history.clear());
-                  },
-                  icon: const Icon(Icons.delete_outline, size: 16),
-                  label: const Text('Clear All'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-          ],
-
-          // 历史记录列表
-          if (hasHistory)
-            for (final record in _history) _buildHistoryItem(record),
-
-          // 空状态提示
-          if (!hasHistory && !_isListening) ...[
-            SizedBox(height: 60),
+          // 空状态引导
+          if (_history.isEmpty) ...[
+            const SizedBox(height: 60),
             Icon(
               Icons.mic_none_rounded,
               size: 64,
@@ -414,18 +550,47 @@ class _HomePageState extends State<HomePage> {
               '点击麦克风开始识别',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
             ),
             const SizedBox(height: 8),
             Text(
-              '识别结果将显示在这里',
+              '支持中文和英文语音识别',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(
-                  context,
-                ).colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
-              ),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                  ),
+            ),
+          ],
+
+          // 历史记录
+          if (_history.isNotEmpty) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '识别记录',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+                Text(
+                  '${_history.length} 条',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            HistoryListWidget(
+              records: _history,
+              onPlay: (record) => _playAudio(record.audioPath),
+              onDelete: (record) => _deleteRecord(record),
+              onFavoriteToggle: (record, value) =>
+                  _toggleFavorite(record, value),
             ),
           ],
         ],
@@ -433,259 +598,224 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildResultCard() {
-    final displayText = _partialResult.isNotEmpty
-        ? _partialResult
-        : _result.isNotEmpty
-        ? _result
-        : '';
-    final isPartial = _partialResult.isNotEmpty;
-    final hasContent = displayText.isNotEmpty;
-
+  // --- 录音态：沉浸式波形界面 ---
+  Widget _buildRecordingState() {
     return Container(
-      constraints: BoxConstraints(minHeight: 120, maxHeight: 300),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isPartial
-              ? Theme.of(context).colorScheme.primary
-              : Theme.of(
-                  context,
-                ).colorScheme.outlineVariant.withValues(alpha: 0.3),
-          width: isPartial ? 2 : 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Theme.of(context).colorScheme.shadow.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+      color: Theme.of(context).colorScheme.surface,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 卡片头部
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.record_voice_over_rounded,
-                  size: 20,
-                  color: isPartial
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  isPartial ? '正在识别...' : '识别结果',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: isPartial
-                        ? Theme.of(context).colorScheme.primary
-                        : Theme.of(context).colorScheme.onSurface,
+          // 波形动画区域
+          Expanded(
+            flex: 3,
+            child: Center(
+              child: AnimatedBuilder(
+                animation: _waveformController,
+                builder: (context, child) {
+                  return CustomPaint(
+                    size: const Size(260, 260),
+                    painter: WaveformPainter(
+                      animationValue: _waveformController.value,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+
+          // 实时识别文本
+          Expanded(
+            flex: 2,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.record_voice_over_rounded,
+                        size: 16,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '正在识别...',
+                        style:
+                            Theme.of(context).textTheme.labelMedium?.copyWith(
+                                  color: Theme.of(context).colorScheme.error,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                      ),
+                    ],
                   ),
-                ),
-                if (isPartial) ...[
-                  const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Theme.of(
-                        context,
-                      ).colorScheme.primaryContainer.withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 6,
-                          height: 6,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primary,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          formatDuration(_recordingDuration),
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(
-                                color: Theme.of(context).colorScheme.primary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                        ),
-                      ],
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Text(
+                        _partialResult.isEmpty
+                            ? '等待语音输入...'
+                            : _partialResult,
+                        style:
+                            Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                  height: 1.6,
+                                  color: _partialResult.isEmpty
+                                      ? Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant
+                                          .withValues(alpha: 0.4)
+                                      : Theme.of(context)
+                                          .colorScheme
+                                          .onSurface,
+                                ),
+                      ),
                     ),
                   ),
                 ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- 结果态：识别结果卡片 ---
+  Widget _buildResultState() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 结果卡片
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Theme.of(
+                  context,
+                ).colorScheme.outlineVariant.withValues(alpha: 0.3),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.shadow.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 头部
+                Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle_rounded,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '识别结果',
+                      style:
+                          Theme.of(context).textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.primaryContainer.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        formatDuration(_recordingDuration),
+                        style:
+                            Theme.of(context).textTheme.labelSmall?.copyWith(
+                                  color:
+                                      Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // 识别文本
+                Text(
+                  _finalResult,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        height: 1.6,
+                      ),
+                ),
+                const SizedBox(height: 16),
+
+                // 操作按钮
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => _copyText(_finalResult),
+                      icon: const Icon(Icons.copy_all_rounded, size: 16),
+                      label: const Text('复制'),
+                    ),
+                    const SizedBox(width: 4),
+                    TextButton.icon(
+                      onPressed: _audioPath != null
+                          ? () => _playAudio(_audioPath!)
+                          : null,
+                      icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                      label: const Text('播放'),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
 
-          // 文本内容
-          Expanded(
-            child: hasContent
-                ? SingleChildScrollView(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    child: Text(
-                      displayText,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        height: 1.6,
-                        color: isPartial
-                            ? Theme.of(context).colorScheme.primary
-                            : Theme.of(context).colorScheme.onSurface,
-                      ),
-                    ),
-                  )
-                : Center(
-                    child: Text(
-                      'Press the microphone button to start',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-          ),
+          const SizedBox(height: 24),
 
-          // 操作按钮
-          if (hasContent && !isPartial)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton.icon(
-                    onPressed: () {
-                      // TODO: 实现复制功能
-                      showSnackBar(context, 'Copy feature coming soon');
-                    },
-                    icon: const Icon(Icons.copy_all_rounded, size: 16),
-                    label: const Text('Copy'),
+          // 历史记录标题
+          if (_history.isNotEmpty) ...[
+            Text(
+              '识别记录',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
                   ),
-                  const SizedBox(width: 4),
-                  TextButton.icon(
-                    onPressed: () {
-                      // TODO: 实现语音回放功能
-                      showSnackBar(context, 'Audio playback feature coming soon');
-                    },
-                    icon: const Icon(Icons.play_arrow_rounded, size: 16),
-                    label: const Text('Play Audio'),
-                  ),
-                ],
-              ),
             ),
+            const SizedBox(height: 12),
+            HistoryListWidget(
+              records: _history,
+              onPlay: (record) => _playAudio(record.audioPath),
+              onDelete: (record) => _deleteRecord(record),
+              onFavoriteToggle: (record, value) =>
+                  _toggleFavorite(record, value),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildHistoryItem(_RecognitionRecord record) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Theme.of(
-            context,
-          ).colorScheme.outlineVariant.withValues(alpha: 0.3),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 时间和时长
-          Row(
-            children: [
-              Icon(
-                Icons.schedule_rounded,
-                size: 14,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                formatTime(record.timestamp),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Icon(
-                Icons.timer_rounded,
-                size: 14,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                formatDuration(record.duration),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const Spacer(),
-              // 操作按钮
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    onPressed: () {
-                      // TODO: 实现语音回放
-                      showSnackBar(context, 'Audio playback coming soon');
-                    },
-                    icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                    tooltip: 'Play Audio',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: () {
-                      // TODO: 实现复制
-                      showSnackBar(context, 'Copy feature coming soon');
-                    },
-                    icon: const Icon(Icons.copy_all_rounded, size: 18),
-                    tooltip: 'Copy Text',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // 识别文本
-          Text(
-            record.text,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(height: 1.5),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
-    );
-  }
-
+  // --- 底部控制栏 ---
   Widget _buildControlBar() {
     final isReady = AsrSdk.isStarted && AsrSdk.isInitialized;
     final needsModel = !AsrSdk.isInitialized;
+    final isRecording = _pageState == _PageState.recording;
+    final isResult = _pageState == _PageState.result;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -693,7 +823,9 @@ class _HomePageState extends State<HomePage> {
         color: Theme.of(context).colorScheme.surface,
         boxShadow: [
           BoxShadow(
-            color: Theme.of(context).colorScheme.shadow.withValues(alpha: 0.1),
+            color: Theme.of(
+              context,
+            ).colorScheme.shadow.withValues(alpha: 0.1),
             blurRadius: 10,
             offset: const Offset(0, -4),
           ),
@@ -701,91 +833,111 @@ class _HomePageState extends State<HomePage> {
       ),
       child: SafeArea(
         top: false,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (needsModel)
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.warning_amber_rounded,
-                        color: Theme.of(context).colorScheme.onErrorContainer,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Please download model first',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onErrorContainer,
-                              ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            else
-              Column(
+        child: needsModel
+            ? _buildModelWarning()
+            : Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 300),
                     transitionBuilder: (child, animation) {
-                      return ScaleTransition(scale: animation, child: child);
+                      return ScaleTransition(
+                        scale: animation,
+                        child: child,
+                      );
                     },
-                    child: _isListening
-                        ? SizedBox(
-                            key: const ValueKey('stop'),
-                            child: FloatingActionButton.large(
-                              onPressed: _stopRecognition,
-                              backgroundColor: Theme.of(
-                                context,
-                              ).colorScheme.error,
-                              foregroundColor: Theme.of(
-                                context,
-                              ).colorScheme.onError,
-                              elevation: 8,
-                              child: const Icon(Icons.stop_rounded, size: 36),
-                            ),
-                          )
-                        : SizedBox(
-                            key: const ValueKey('mic'),
-                            child: FloatingActionButton.large(
-                              onPressed: isReady ? _startRecognition : null,
-                              elevation: 8,
-                              child: const Icon(Icons.mic_rounded, size: 36),
-                            ),
-                          ),
+                    child: _buildMicButton(isReady, isRecording, isResult),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    _isListening
-                        ? 'Tap to stop'
-                        : isReady
-                        ? 'Tap to start'
-                        : 'Initializing...',
+                    isRecording
+                        ? '点击停止'
+                        : isResult
+                            ? '点击再次录音'
+                            : isReady
+                                ? '点击开始识别'
+                                : '初始化中...',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
                   ),
                 ],
               ),
-          ],
+      ),
+    );
+  }
+
+  Widget _buildModelWarning() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.warning_amber_rounded,
+            color: Theme.of(context).colorScheme.onErrorContainer,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Please download model first',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMicButton(bool isReady, bool isRecording, bool isResult) {
+    if (isRecording) {
+      return SizedBox(
+        key: const ValueKey('stop'),
+        child: FloatingActionButton.large(
+          onPressed: _stopRecognition,
+          backgroundColor: Theme.of(context).colorScheme.error,
+          foregroundColor: Theme.of(context).colorScheme.onError,
+          elevation: 8,
+          child: const Icon(Icons.stop_rounded, size: 36),
+        ),
+      );
+    }
+
+    if (isResult) {
+      return SizedBox(
+        key: const ValueKey('retry'),
+        child: ScaleTransition(
+          scale: _pulseAnimation,
+          child: FloatingActionButton.large(
+            onPressed: _resetForNewRecording,
+            elevation: 8,
+            child: const Icon(Icons.mic_rounded, size: 36),
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      key: const ValueKey('mic'),
+      child: ScaleTransition(
+        scale: isReady ? _pulseAnimation : const AlwaysStoppedAnimation(1.0),
+        child: FloatingActionButton.large(
+          onPressed: isReady ? _startRecognition : null,
+          elevation: 8,
+          child: const Icon(Icons.mic_rounded, size: 36),
         ),
       ),
     );
   }
+
+  // ==================== 辅助 ====================
 
   Color _getStatusColor() {
     switch (_sdkState) {
@@ -820,9 +972,9 @@ class _HomePageState extends State<HomePage> {
             Text('• Offline processing (no internet needed)'),
             Text('• Chinese & English support'),
             SizedBox(height: 8),
-            Text('• Recognition history'),
+            Text('• Recognition history with audio playback'),
             Text('• Multi-speaker meeting mode'),
-            Text('• Audio playback (coming soon)'),
+            Text('• Copy & share results'),
           ],
         ),
         actions: [
@@ -839,20 +991,9 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _stateSubscription?.cancel();
     _recordingTimer?.cancel();
+    _waveformController.dispose();
+    _pulseController.dispose();
     AsrSdk.stop();
     super.dispose();
   }
-}
-
-// 识别记录数据类
-class _RecognitionRecord {
-  final String text;
-  final DateTime timestamp;
-  final int duration;
-
-  _RecognitionRecord({
-    required this.text,
-    required this.timestamp,
-    required this.duration,
-  });
 }
