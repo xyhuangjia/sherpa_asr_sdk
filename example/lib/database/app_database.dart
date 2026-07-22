@@ -22,11 +22,7 @@ class AppDatabase {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, 'sherpa_history.db');
 
-    return await openDatabase(
-      path,
-      version: 1,
-      onCreate: _onCreate,
-    );
+    return await openDatabase(path, version: 1, onCreate: _onCreate);
   }
 
   /// 创建表
@@ -45,9 +41,11 @@ class AppDatabase {
 
     // 创建索引
     await db.execute(
-        'CREATE INDEX idx_timestamp ON recognition_records(timestamp)');
+      'CREATE INDEX idx_timestamp ON recognition_records(timestamp)',
+    );
     await db.execute(
-        'CREATE INDEX idx_favorite ON recognition_records(isFavorite)');
+      'CREATE INDEX idx_favorite ON recognition_records(isFavorite)',
+    );
   }
 
   /// 关闭数据库

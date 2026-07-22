@@ -27,8 +27,9 @@ class _SearchFilterWidgetState extends State<SearchFilterWidget> {
   @override
   void initState() {
     super.initState();
-    _keywordController =
-        TextEditingController(text: widget.initialFilter.keyword ?? '');
+    _keywordController = TextEditingController(
+      text: widget.initialFilter.keyword ?? '',
+    );
     _startDate = widget.initialFilter.startDate;
     _endDate = widget.initialFilter.endDate;
     _isFavoriteFilter = widget.initialFilter.isFavorite ?? false;
@@ -48,8 +49,7 @@ class _SearchFilterWidgetState extends State<SearchFilterWidget> {
         color: Theme.of(context).colorScheme.surface,
         boxShadow: [
           BoxShadow(
-            color:
-                Theme.of(context).colorScheme.shadow.withValues(alpha: 0.1),
+            color: Theme.of(context).colorScheme.shadow.withValues(alpha: 0.1),
             blurRadius: 10,
           ),
         ],
@@ -130,13 +130,16 @@ class _SearchFilterWidgetState extends State<SearchFilterWidget> {
   }
 
   void _applyFilter() {
-    widget.onFilterChanged(SearchFilter(
-      keyword:
-          _keywordController.text.isEmpty ? null : _keywordController.text,
-      startDate: _startDate,
-      endDate: _endDate,
-      isFavorite: _isFavoriteFilter ? true : null,
-    ));
+    widget.onFilterChanged(
+      SearchFilter(
+        keyword: _keywordController.text.isEmpty
+            ? null
+            : _keywordController.text,
+        startDate: _startDate,
+        endDate: _endDate,
+        isFavorite: _isFavoriteFilter ? true : null,
+      ),
+    );
   }
 
   Future<void> _selectDateRange() async {

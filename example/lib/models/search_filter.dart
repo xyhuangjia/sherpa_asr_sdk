@@ -30,12 +30,12 @@ class SearchFilter {
 
   /// 清空所有过滤条件
   const SearchFilter.empty()
-      : keyword = null,
-        startDate = null,
-        endDate = null,
-        minDuration = null,
-        maxDuration = null,
-        isFavorite = null;
+    : keyword = null,
+      startDate = null,
+      endDate = null,
+      minDuration = null,
+      maxDuration = null,
+      isFavorite = null;
 
   /// 复制并修改
   SearchFilter copyWith({

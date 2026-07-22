@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,14 +9,28 @@ import 'models/recognition_record.dart';
 import 'pages/multi_speaker_meeting_page.dart';
 import 'services/audio_recorder_service.dart';
 import 'services/history_storage_service.dart';
+import 'theme/app_theme.dart';
+import 'utils/demo_model_downloader.dart';
 import 'utils/format_utils.dart';
 import 'widgets/audio_player_widget.dart';
 import 'widgets/history_list_widget.dart';
+import 'widgets/tech_background.dart';
+import 'widgets/tech_controls.dart';
 import 'widgets/waveform_painter.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   AsrSdk.setLogger(DefaultAsrLogger());
+  // 锁定浅色系统栏图标（深色背景）。
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
+      systemNavigationBarColor: AppColors.bg,
+      systemNavigationBarIconBrightness: Brightness.light,
+    ),
+  );
   runApp(const MyApp());
 }
 
@@ -25,22 +40,11 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Sherpa ASR Demo',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.red,
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.red,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
-      themeMode: ThemeMode.system,
+      title: 'Sherpa ASR',
+      debugShowCheckedModeBanner: false,
+      theme: appTheme,
+      darkTheme: appTheme,
+      themeMode: ThemeMode.dark,
       home: const HomePage(),
     );
   }
@@ -72,6 +76,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   String _partialResult = '';
   String _finalResult = '';
   String? _audioPath;
+  bool _isCompletingRecognition = false;
   StreamSubscription<AsrSdkState>? _stateSubscription;
   Timer? _recordingTimer;
 
@@ -159,8 +164,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       _status = 'Downloading model...';
     });
 
-    final manager = SherpaModelsManager.instance;
-    final success = await manager.downloadStreamingBilingualModels(
+    final success = await DemoModelDownloader().downloadStreamingBilingualModel(
       onProgress: (progress) {
         setState(() => _downloadProgress = progress);
       },
@@ -241,9 +245,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     });
 
     // 启动音频录制（保存 WAV 文件）
-    AudioRecorderService.instance.startRecording().then((path) {
-      _audioPath = path;
-    }).catchError((_) {});
+    AudioRecorderService.instance
+        .startRecording()
+        .then((path) {
+          _audioPath = path;
+        })
+        .catchError((_) {});
 
     // 启动 ASR 识别流
     AsrSdk.recognize().listen(
@@ -254,11 +261,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           if (changed) HapticFeedback.selectionClick();
         }
       },
-      onError: (error) {
+      onError: (error) async {
         _recordingTimer?.cancel();
         _waveformController.stop();
         _pulseController.stop();
-        AudioRecorderService.instance.cancelRecording();
+        await AudioRecorderService.instance.cancelRecording();
         if (mounted) {
           setState(() {
             _status = 'Error: $error';
@@ -267,49 +274,48 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           showSnackBar(context, 'Recognition error: $error');
         }
       },
-      onDone: () {
-        _recordingTimer?.cancel();
-        _waveformController.stop();
-        _pulseController.stop();
-        AudioRecorderService.instance.stopRecording();
-        if (mounted) {
-          setState(() {
-            if (_partialResult.isNotEmpty) {
-              _finalResult = _partialResult;
-              _pageState = _PageState.result;
-              _saveRecording();
-            } else {
-              _pageState = _PageState.ready;
-            }
-            _partialResult = '';
-            _status = 'Ready';
-          });
-        }
-      },
+      onDone: _completeRecognition,
     );
   }
 
   Future<void> _stopRecognition() async {
     HapticFeedback.heavyImpact();
     await AsrSdk.stopRecognition();
-    _recordingTimer?.cancel();
-    _waveformController.stop();
-    _pulseController.stop();
+    await _completeRecognition();
+  }
 
-    _audioPath = await AudioRecorderService.instance.stopRecording();
+  Future<void> _completeRecognition() async {
+    if (_isCompletingRecognition) return;
 
-    if (mounted) {
+    _isCompletingRecognition = true;
+    try {
+      final recognizedText = _partialResult;
+
+      _recordingTimer?.cancel();
+      _waveformController.stop();
+      _pulseController.stop();
+
+      _audioPath = await AudioRecorderService.instance.stopRecording();
+
+      if (!mounted) return;
+
+      final shouldSave = recognizedText.isNotEmpty;
       setState(() {
-        if (_partialResult.isNotEmpty) {
-          _finalResult = _partialResult;
+        if (shouldSave) {
+          _finalResult = recognizedText;
           _pageState = _PageState.result;
-          _saveRecording();
         } else {
           _pageState = _PageState.ready;
         }
         _partialResult = '';
         _status = 'Ready';
       });
+
+      if (shouldSave) {
+        await _saveRecording();
+      }
+    } finally {
+      _isCompletingRecognition = false;
     }
   }
 
@@ -338,12 +344,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
     showModalBottomSheet(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(16),
-        child: AudioPlayerWidget(audioPath: audioPath),
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.outline,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              AudioPlayerWidget(audioPath: audioPath),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -354,19 +374,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: _buildAppBar(),
-      body: Column(
-        children: [
-          if (_pageState != _PageState.recording) _buildStatusSection(),
-          if (_pageState != _PageState.recording)
-            Divider(
-              height: 1,
-              color: Theme.of(
-                context,
-              ).colorScheme.outlineVariant.withValues(alpha: 0.3),
-            ),
-          Expanded(child: _buildBody()),
-          _buildControlBar(),
-        ],
+      body: TechBackground(
+        child: Column(
+          children: [
+            if (_pageState != _PageState.recording) _buildStatusSection(),
+            if (_pageState != _PageState.recording)
+              const Divider(height: 1, color: AppColors.outlineVariant),
+            Expanded(child: _buildBody()),
+            _buildControlBar(),
+          ],
+        ),
       ),
     );
   }
@@ -375,44 +392,60 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     final isRecording = _pageState == _PageState.recording;
 
     return AppBar(
-      backgroundColor: isRecording
-          ? Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.3)
-          : Theme.of(context).colorScheme.surfaceContainer,
-      elevation: 0,
-      title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            isRecording
-                ? '正在录音'
-                : _pageState == _PageState.result
-                    ? '识别完成'
-                    : '语音识别',
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+      backgroundColor: Colors.transparent,
+      flexibleSpace: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              AppColors.surfaceHigh.withValues(alpha: 0.92),
+              AppColors.surfaceHigh.withValues(alpha: 0.0),
+            ],
           ),
-          if (isRecording)
-            Text(
-              formatDuration(_recordingDuration),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.error,
-                    fontWeight: FontWeight.w600,
+        ),
+      ),
+      titleSpacing: 16,
+      title: Row(
+        children: [
+          LiveDot(
+            active: isRecording,
+            color: isRecording ? AppColors.error : _getStatusColor(),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isRecording
+                      ? '正在录音'
+                      : _pageState == _PageState.result
+                      ? '识别完成'
+                      : '语音识别',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.onBg,
                   ),
-            )
-          else
-            Text(
-              _status,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    fontSize: 11,
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.onSurface.withValues(alpha: 0.6),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  isRecording ? 'LIVE STREAM' : _status,
+                  style: mono(
+                    size: 11,
+                    letterSpacing: 1.6,
+                    color: isRecording ? AppColors.primary : AppColors.onBgDim,
                   ),
+                ),
+              ],
             ),
+          ),
         ],
       ),
       actions: [
         IconButton(
-          icon: const Icon(Icons.groups_rounded),
+          icon: const Icon(Icons.groups_2_rounded),
           onPressed: () {
             Navigator.of(context).push(
               MaterialPageRoute(
@@ -425,7 +458,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         IconButton(
           icon: const Icon(Icons.info_outline),
           onPressed: _showInfo,
-          tooltip: 'About',
+          tooltip: '关于',
         ),
       ],
     );
@@ -433,10 +466,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Widget _buildStatusSection() {
     final needsModel = !AsrSdk.isInitialized;
+    final statusColor = _getStatusColor();
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      color: Theme.of(context).colorScheme.surfaceContainer,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: AppSpacing.md,
+      ),
       child: Column(
         children: [
           Row(
@@ -445,71 +481,75 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 width: 8,
                 height: 8,
                 decoration: BoxDecoration(
-                  color: _getStatusColor(),
+                  color: statusColor,
                   shape: BoxShape.circle,
+                  boxShadow: glow(statusColor, radius: 6, alpha: 0.5),
                 ),
               ),
               const SizedBox(width: 8),
               Text(
                 _sdkState.name.toUpperCase(),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: _getStatusColor(),
-                      fontWeight: FontWeight.w600,
-                    ),
+                style: mono(size: 11, color: statusColor, letterSpacing: 1.5),
               ),
               if (_initProgress > 0 && _initProgress < 1.0) ...[
                 const Spacer(),
                 Text(
-                  '${(_initProgress * 100).toInt()}%',
-                  style: Theme.of(context).textTheme.labelSmall,
+                  '${(_initProgress * 100).toString().padLeft(2, '0')}%',
+                  style: mono(size: 11, color: AppColors.onBgDim),
                 ),
               ],
             ],
           ),
           if (_initProgress > 0 && _initProgress < 1.0) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
                 value: _initProgress,
                 minHeight: 4,
-                backgroundColor: Theme.of(
-                  context,
-                ).colorScheme.surfaceContainerHighest,
               ),
             ),
           ],
           if (needsModel && !_isDownloading) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
-              child: ElevatedButton.icon(
+              child: OutlinedButton.icon(
                 onPressed: _downloadModel,
-                icon: const Icon(Icons.download_rounded, size: 18),
-                label: const Text('Download Model (~30MB)'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.errorContainer,
-                  foregroundColor: Theme.of(
-                    context,
-                  ).colorScheme.onErrorContainer,
-                  padding: const EdgeInsets.symmetric(vertical: 10),
+                icon: const Icon(Icons.cloud_download_rounded, size: 18),
+                label: const Text('下载模型  ·  ~30MB'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  foregroundColor: AppColors.primary,
+                  side: BorderSide(
+                    color: AppColors.primary.withValues(alpha: 0.6),
+                  ),
                 ),
               ),
             ),
           ],
           if (_isDownloading) ...[
-            const SizedBox(height: 12),
-            LinearProgressIndicator(
-              value: _downloadProgress,
-              minHeight: 4,
-              backgroundColor: Theme.of(
-                context,
-              ).colorScheme.surfaceContainerHighest,
+            const SizedBox(height: 14),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: _downloadProgress,
+                minHeight: 4,
+              ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              'Downloading: ${(_downloadProgress * 100).toInt()}%',
-              style: Theme.of(context).textTheme.bodySmall,
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'DOWNLOAD',
+                  style: mono(size: 10, color: AppColors.onBgDim),
+                ),
+                Text(
+                  '${(_downloadProgress * 100).toString().padLeft(2, '0')}%',
+                  style: mono(size: 11, color: AppColors.primary),
+                ),
+              ],
             ),
           ],
         ],
@@ -531,37 +571,46 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // --- 就绪态：历史记录列表 ---
   Widget _buildReadyState() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // 空状态引导
           if (_history.isEmpty) ...[
-            const SizedBox(height: 60),
-            Icon(
-              Icons.mic_none_rounded,
-              size: 64,
-              color: Theme.of(
-                context,
-              ).colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
+            const SizedBox(height: 72),
+            Center(
+              child: Container(
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.35),
+                  ),
+                  boxShadow: glow(AppColors.primary, radius: 28, alpha: 0.25),
+                ),
+                child: const Icon(
+                  Icons.graphic_eq_rounded,
+                  size: 48,
+                  color: AppColors.primary,
+                ),
+              ),
             ),
-            const SizedBox(height: 16),
-            Text(
+            const SizedBox(height: 24),
+            const Text(
               '点击麦克风开始识别',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: AppColors.onBg,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
-              '支持中文和英文语音识别',
+              'SHERPA-ONNX  ·  离线语音识别  ·  中英双语',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
-                  ),
+              style: mono(size: 11, color: AppColors.onBgDim, letterSpacing: 1),
             ),
           ],
 
@@ -570,21 +619,39 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  '识别记录',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
+                Row(
+                  children: [
+                    Container(
+                      width: 3,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: AppColors.primary,
+                        borderRadius: BorderRadius.circular(2),
+                        boxShadow: glow(
+                          AppColors.primary,
+                          radius: 4,
+                          alpha: 0.6,
+                        ),
                       ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      '识别记录',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.onBg,
+                      ),
+                    ),
+                  ],
                 ),
                 Text(
                   '${_history.length} 条',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
+                  style: mono(size: 11, color: AppColors.onBgDim),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             HistoryListWidget(
               records: _history,
               onPlay: (record) => _playAudio(record.audioPath),
@@ -601,9 +668,44 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // --- 录音态：沉浸式波形界面 ---
   Widget _buildRecordingState() {
     return Container(
-      color: Theme.of(context).colorScheme.surface,
+      padding: const EdgeInsets.only(top: 8),
       child: Column(
         children: [
+          // 顶部 REC + 大号计时器
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                const LiveDot(active: true, color: AppColors.error),
+                const SizedBox(width: 8),
+                Text(
+                  'REC',
+                  style: mono(
+                    size: 12,
+                    color: AppColors.error,
+                    letterSpacing: 3,
+                  ),
+                ),
+                const Spacer(),
+                AnimatedBuilder(
+                  animation: _waveformController,
+                  builder: (context, _) {
+                    final blink =
+                        (_waveformController.value * 2).floor() % 2 == 0;
+                    return Text(
+                      '${formatDuration(_recordingDuration)}${blink ? '▍' : ' '}',
+                      style: mono(
+                        size: 30,
+                        color: AppColors.primary,
+                        letterSpacing: 2,
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+
           // 波形动画区域
           Expanded(
             flex: 3,
@@ -615,7 +717,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     size: const Size(260, 260),
                     painter: WaveformPainter(
                       animationValue: _waveformController.value,
-                      color: Theme.of(context).colorScheme.error,
+                      color: AppColors.primary,
                     ),
                   );
                 },
@@ -627,48 +729,62 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           Expanded(
             flex: 2,
             child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              decoration: BoxDecoration(
+                color: AppColors.surface.withValues(alpha: 0.7),
+                borderRadius: BorderRadius.circular(AppRadius.md),
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.25),
+                ),
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      Icon(
-                        Icons.record_voice_over_rounded,
-                        size: 16,
-                        color: Theme.of(context).colorScheme.error,
+                      Container(
+                        width: 3,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          borderRadius: BorderRadius.circular(2),
+                          boxShadow: glow(
+                            AppColors.primary,
+                            radius: 4,
+                            alpha: 0.6,
+                          ),
+                        ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 8),
                       Text(
-                        '正在识别...',
-                        style:
-                            Theme.of(context).textTheme.labelMedium?.copyWith(
-                                  color: Theme.of(context).colorScheme.error,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                        '正在识别',
+                        style: mono(
+                          size: 11,
+                          color: AppColors.primary,
+                          letterSpacing: 1.6,
+                        ),
+                      ),
+                      const Spacer(),
+                      const Icon(
+                        Icons.graphic_eq_rounded,
+                        size: 14,
+                        color: AppColors.primary,
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   Expanded(
                     child: SingleChildScrollView(
                       child: Text(
-                        _partialResult.isEmpty
-                            ? '等待语音输入...'
-                            : _partialResult,
-                        style:
-                            Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                  height: 1.6,
-                                  color: _partialResult.isEmpty
-                                      ? Theme.of(context)
-                                          .colorScheme
-                                          .onSurfaceVariant
-                                          .withValues(alpha: 0.4)
-                                      : Theme.of(context)
-                                          .colorScheme
-                                          .onSurface,
-                                ),
+                        _partialResult.isEmpty ? '等待语音输入…' : _partialResult,
+                        style: TextStyle(
+                          fontSize: 16,
+                          height: 1.6,
+                          color: _partialResult.isEmpty
+                              ? AppColors.onBgDim.withValues(alpha: 0.5)
+                              : AppColors.onBg,
+                        ),
                       ),
                     ),
                   ),
@@ -676,6 +792,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               ),
             ),
           ),
+          const SizedBox(height: 12),
         ],
       ),
     );
@@ -692,22 +809,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(16),
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(AppRadius.lg),
               border: Border.all(
-                color: Theme.of(
-                  context,
-                ).colorScheme.outlineVariant.withValues(alpha: 0.3),
+                color: AppColors.primary.withValues(alpha: 0.3),
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.shadow.withValues(alpha: 0.05),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
+              boxShadow: glow(AppColors.primary, radius: 24, alpha: 0.12),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -718,48 +825,49 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     Icon(
                       Icons.check_circle_rounded,
                       size: 20,
-                      color: Theme.of(context).colorScheme.primary,
+                      color: AppColors.primary,
                     ),
                     const SizedBox(width: 8),
-                    Text(
+                    const Text(
                       '识别结果',
-                      style:
-                          Theme.of(context).textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w600,
-                              ),
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.onBg,
+                      ),
                     ),
                     const Spacer(),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 8,
-                        vertical: 4,
+                        vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.primaryContainer.withValues(alpha: 0.5),
-                        borderRadius: BorderRadius.circular(12),
+                        color: AppColors.primary.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
+                        border: Border.all(
+                          color: AppColors.primary.withValues(alpha: 0.35),
+                        ),
                       ),
                       child: Text(
                         formatDuration(_recordingDuration),
-                        style:
-                            Theme.of(context).textTheme.labelSmall?.copyWith(
-                                  color:
-                                      Theme.of(context).colorScheme.primary,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                        style: mono(size: 11, color: AppColors.primary),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 14),
+                const Divider(height: 1, color: AppColors.outlineVariant),
+                const SizedBox(height: 14),
 
                 // 识别文本
                 Text(
                   _finalResult,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        height: 1.6,
-                      ),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    height: 1.7,
+                    color: AppColors.onBg,
+                  ),
                 ),
                 const SizedBox(height: 16),
 
@@ -790,13 +898,29 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
           // 历史记录标题
           if (_history.isNotEmpty) ...[
-            Text(
-              '识别记录',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+            Row(
+              children: [
+                Container(
+                  width: 3,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius: BorderRadius.circular(2),
+                    boxShadow: glow(AppColors.primary, radius: 4, alpha: 0.6),
                   ),
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  '识别记录',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.onBg,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             HistoryListWidget(
               records: _history,
               onPlay: (record) => _playAudio(record.audioPath),
@@ -817,78 +941,80 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     final isRecording = _pageState == _PageState.recording;
     final isResult = _pageState == _PageState.result;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        boxShadow: [
-          BoxShadow(
-            color: Theme.of(
-              context,
-            ).colorScheme.shadow.withValues(alpha: 0.1),
-            blurRadius: 10,
-            offset: const Offset(0, -4),
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+          decoration: BoxDecoration(
+            color: AppColors.bg.withValues(alpha: 0.72),
+            border: Border(
+              top: BorderSide(color: AppColors.primary.withValues(alpha: 0.18)),
+            ),
           ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: needsModel
-            ? _buildModelWarning()
-            : Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 300),
-                    transitionBuilder: (child, animation) {
-                      return ScaleTransition(
-                        scale: animation,
-                        child: child,
-                      );
-                    },
-                    child: _buildMicButton(isReady, isRecording, isResult),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    isRecording
-                        ? '点击停止'
-                        : isResult
+          child: SafeArea(
+            top: false,
+            child: needsModel
+                ? _buildModelWarning()
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        transitionBuilder: (child, animation) {
+                          return ScaleTransition(
+                            scale: animation,
+                            child: child,
+                          );
+                        },
+                        child: _buildMicButton(isReady, isRecording, isResult),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        isRecording
+                            ? '点击停止'
+                            : isResult
                             ? '点击再次录音'
                             : isReady
-                                ? '点击开始识别'
-                                : '初始化中...',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant,
+                            ? '点击开始识别'
+                            : '初始化中…',
+                        style: mono(
+                          size: 11,
+                          color: AppColors.onBgDim,
+                          letterSpacing: 1.4,
                         ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+          ),
+        ),
       ),
     );
   }
 
   Widget _buildModelWarning() {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.errorContainer,
-        borderRadius: BorderRadius.circular(12),
+        color: AppColors.error.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.4)),
       ),
       child: Row(
         children: [
-          Icon(
+          const Icon(
             Icons.warning_amber_rounded,
-            color: Theme.of(context).colorScheme.onErrorContainer,
+            color: AppColors.error,
             size: 20,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Please download model first',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onErrorContainer,
-                  ),
+              '请先在上方下载模型',
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.error.withValues(alpha: 0.95),
+              ),
             ),
           ),
         ],
@@ -898,41 +1024,38 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Widget _buildMicButton(bool isReady, bool isRecording, bool isResult) {
     if (isRecording) {
-      return SizedBox(
+      return GradientFab(
         key: const ValueKey('stop'),
-        child: FloatingActionButton.large(
-          onPressed: _stopRecognition,
-          backgroundColor: Theme.of(context).colorScheme.error,
-          foregroundColor: Theme.of(context).colorScheme.onError,
-          elevation: 8,
-          child: const Icon(Icons.stop_rounded, size: 36),
-        ),
+        gradient: AppGradients.stopButton,
+        glowColor: AppColors.error,
+        icon: Icons.stop_rounded,
+        onPressed: _stopRecognition,
       );
     }
 
     if (isResult) {
-      return SizedBox(
-        key: const ValueKey('retry'),
-        child: ScaleTransition(
-          scale: _pulseAnimation,
-          child: FloatingActionButton.large(
-            onPressed: _resetForNewRecording,
-            elevation: 8,
-            child: const Icon(Icons.mic_rounded, size: 36),
-          ),
+      return ScaleTransition(
+        scale: _pulseAnimation,
+        child: GradientFab(
+          key: const ValueKey('retry'),
+          gradient: AppGradients.micButton,
+          glowColor: AppColors.primary,
+          icon: Icons.mic_rounded,
+          onPressed: _resetForNewRecording,
         ),
       );
     }
 
-    return SizedBox(
-      key: const ValueKey('mic'),
-      child: ScaleTransition(
-        scale: isReady ? _pulseAnimation : const AlwaysStoppedAnimation(1.0),
-        child: FloatingActionButton.large(
-          onPressed: isReady ? _startRecognition : null,
-          elevation: 8,
-          child: const Icon(Icons.mic_rounded, size: 36),
-        ),
+    return ScaleTransition(
+      scale: isReady ? _pulseAnimation : const AlwaysStoppedAnimation(1.0),
+      child: GradientFab(
+        key: const ValueKey('mic'),
+        gradient: AppGradients.micButton,
+        glowColor: AppColors.primary,
+        glowAlpha: isReady ? 0.6 : 0.0,
+        dimmed: !isReady,
+        icon: Icons.mic_rounded,
+        onPressed: isReady ? _startRecognition : null,
       ),
     );
   }
@@ -942,14 +1065,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Color _getStatusColor() {
     switch (_sdkState) {
       case AsrSdkState.notInitialized:
-        return Theme.of(context).colorScheme.onSurfaceVariant;
+        return AppColors.onBgDim;
       case AsrSdkState.initializing:
-        return Theme.of(context).colorScheme.primary;
+        return AppColors.secondary;
       case AsrSdkState.ready:
       case AsrSdkState.started:
-        return Theme.of(context).colorScheme.primary;
+        return AppColors.success;
       case AsrSdkState.error:
-        return Theme.of(context).colorScheme.error;
+        return AppColors.error;
     }
   }
 

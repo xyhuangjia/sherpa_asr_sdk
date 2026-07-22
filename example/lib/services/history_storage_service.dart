@@ -136,11 +136,7 @@ class HistoryStorageService {
     }
 
     // 删除数据库记录
-    await db.delete(
-      'recognition_records',
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.delete('recognition_records', where: 'id = ?', whereArgs: [id]);
   }
 
   /// 清空所有记录和音频文件
@@ -162,7 +158,8 @@ class HistoryStorageService {
   Future<int> getCount() async {
     final db = await AppDatabase.instance.database;
     final result = await db.rawQuery(
-        'SELECT COUNT(*) as count FROM recognition_records');
+      'SELECT COUNT(*) as count FROM recognition_records',
+    );
     return Sqflite.firstIntValue(result) ?? 0;
   }
 }

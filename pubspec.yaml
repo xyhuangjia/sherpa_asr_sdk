@@ -13,16 +13,12 @@ dependencies:
   flutter:
     sdk: flutter
   sherpa_onnx: ^1.12.23
-  record: ^6.1.2
+  record: ^7.1.1
   path_provider: ^2.1.1
-  dio: ^5.9.0
+  dio: ^5.10.0
   archive: ^4.0.7
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-
-flutter:
-  assets:
-    - assets/models/sherpa-onnx/base/

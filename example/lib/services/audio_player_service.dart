@@ -4,12 +4,7 @@ import 'dart:async';
 import 'package:just_audio/just_audio.dart';
 
 /// 播放状态
-enum PlayerState {
-  stopped,
-  playing,
-  paused,
-  completed,
-}
+enum PlayerState { stopped, playing, paused, completed }
 
 /// 音频播放服务
 class AudioPlayerService {
@@ -24,7 +19,7 @@ class AudioPlayerService {
 
   Stream<PlayerState> get playerStateStream => _stateController.stream;
   Stream<Duration> get positionStream => _player.positionStream;
-  
+
   /// 获取音频时长流（过滤掉 null 值）
   Stream<Duration> get durationStream =>
       _player.durationStream.where((d) => d != null).cast<Duration>();
